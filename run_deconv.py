@@ -206,73 +206,73 @@ kernel_op.set_anatomical_image(images['T1'])
 
 # %%
 # Run the Richardson–Lucy deconvolution with kernel guidance for 5 iterations.
-deconv_kernel_alpha_5, obj_values_kernel_5, rmse_values_kernel_5 = richardson_lucy(
+deconv_kernel_alpha_100, obj_values_kernel_100, rmse_values_kernel_100 = richardson_lucy(
     images['OSEM'],
     blurring_operator,
-    iterations=5,
+    iterations=100,
     ground_truth=images['PET'],
     kernel_operator=kernel_op
 )
 
 # Map the estimated coefficients back using the kernel operator.
-deconv_kernel_5 = kernel_op.direct(deconv_kernel_alpha_5)
+deconv_kernel_100 = kernel_op.direct(deconv_kernel_alpha_100)
 
 # %%
 # Display the deconvolved image and the kernel coefficients.
-fig1 = show2D([deconv_kernel_5, deconv_kernel_alpha_5],
+fig1 = show2D([deconv_kernel_100, deconv_kernel_alpha_100],
               fix_range=[(0, 320), (0, 320)])
-fig1.save(os.path.join(data_dir, 'deconv_kernel_5_iter.png'))
+fig1.save(os.path.join(data_dir, 'deconv_kernel_100_iter.png'))
 
 # %%
 # Display comparison of deconvolved image, OSEM, ground truth, and the difference image.
-difference_image = deconv_kernel_5 - images['PET']
-fig2 = show2D([deconv_kernel_5, images['OSEM'], images['PET'], difference_image],
+difference_image = deconv_kernel_100 - images['PET']
+fig2 = show2D([deconv_kernel_100, images['OSEM'], images['PET'], difference_image],
               title=['Deconvolved', 'OSEM', 'Ground Truth', 'Difference (Deconv - GT)'],
-              origin='upper', num_cols=4)
-fig2.save(os.path.join(data_dir, 'deconv_kernel_5_iter_difference.png'))
+              origin='upper', num_cols=4, fix_range=[(0, 320), (0, 320), (0, 320), (-100,100)])
+fig2.save(os.path.join(data_dir, 'deconv_kernel_100_iter_difference.png'))
 
 # %%
 # Plot the objective function values for the kernel-guided deconvolution.
 plt.figure()
-plt.plot(obj_values_kernel_5)
+plt.plot(obj_values_kernel_100)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_kernel_5_iter_objective.png'))
+plt.savefig(os.path.join(data_dir, 'deconv_kernel_100_iter_objective.png'))
 
 # %%
 # Plot the RMSE for the kernel-guided deconvolution.
 plt.figure()
-plt.plot(rmse_values_kernel_5)
+plt.plot(rmse_values_kernel_100)
 plt.xlabel('Iteration')
 plt.ylabel('RMSE')
-plt.savefig(os.path.join(data_dir, 'deconv_kernel_5_iter_rmse.png'))
+plt.savefig(os.path.join(data_dir, 'deconv_kernel_100_iter_rmse.png'))
 
 # %%
 # Run standard Richardson–Lucy deconvolution (without kernel guidance) for 5 iterations.
-deconv_rl_5, obj_values_rl_5, rmse_values_rl_5 = richardson_lucy(
-    images['OSEM'], blurring_operator, iterations=5, ground_truth=images['PET']
+deconv_rl_20, obj_values_rl_20, rmse_values_rl_20 = richardson_lucy(
+    images['OSEM'], blurring_operator, iterations=20, ground_truth=images['PET']
 )
 
 # %% display the comparison of deconvolved image, OSEM, ground truth, and the difference image.
-difference_image_rl = deconv_rl_5 - images['PET']
-fig3 = show2D([deconv_rl_5, images['OSEM'], images['PET'], difference_image_rl],
+difference_image_rl = deconv_rl_20 - images['PET']
+fig3 = show2D([deconv_rl_20, images['OSEM'], images['PET'], difference_image_rl],
                 title=['Deconvolved (RL)', 'OSEM', 'Ground Truth', 'Difference (RL - GT)'],
-                origin='upper', num_cols=4)
-fig3.save(os.path.join(data_dir, 'deconv_rl_5_iter_difference.png'))
+                origin='upper', num_cols=4, fix_range=[(0, 320), (0, 320), (0, 320), (-100,100)])
+fig3.save(os.path.join(data_dir, 'deconv_rl_20_iter_difference.png'))
 
 # Plot the objective function for the standard RL deconvolution.
 plt.figure()
-plt.plot(obj_values_rl_5)
+plt.plot(obj_values_rl_20)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_rl_5_iter_objective.png'))
+plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_objective.png'))
 
 # Plot the RMSE for the standard RL deconvolution.
 plt.figure()
-plt.plot(rmse_values_rl_5)
+plt.plot(rmse_values_rl_20)
 plt.xlabel('Iteration')
 plt.ylabel('RMSE')
-plt.savefig(os.path.join(data_dir, 'deconv_rl_5_iter_rmse.png'))
+plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_rmse.png'))
 
 # %% set up directional TV
 
@@ -292,7 +292,7 @@ prior = alpha * fn.OperatorCompositionFunction(fn.SmoothMixedL21Norm(epsilon=1e-
 
 maprl = MAPRL(initial_estimate=images['OSEM'], data_fidelity=df, prior=prior, 
               step_size=0.1, relaxation_eta=0.01, update_objective_interval=1)
-maprl.run(verbose=1, iterations=10)
+maprl.run(verbose=1, iterations=100)
 
 deconv_dtv = maprl.solution
 
@@ -301,7 +301,7 @@ deconv_dtv = maprl.solution
 difference_image_dtv = deconv_dtv - images['PET']
 fig4 = show2D([deconv_dtv, images['OSEM'], images['PET'], difference_image_dtv],
                 title=['Deconvolved (DTV)', 'OSEM', 'Ground Truth', 'Difference (DTV - GT)'],
-                origin='upper', num_cols=4)
+                origin='upper', num_cols=4, fix_range=[(0, 320), (0, 320), (0, 320), (-100,100)])
 fig4.save(os.path.join(data_dir, 'deconv_dtv_difference.png'))
 
 plt.figure(figsize=(15, 5))
@@ -312,12 +312,12 @@ plt.savefig(os.path.join(data_dir, 'deconv_dtv_objective.png'))
 
 # %%
 # Plot profiles through the central slices for comparison.
-center_slice = deconv_kernel_5.shape[0] // 2
-profile_axis = deconv_kernel_5.shape[2] // 2
+center_slice = deconv_kernel_100.shape[0] // 2
+profile_axis = deconv_kernel_100.shape[2] // 2
 
 plt.figure(figsize=(15, 5))
-plt.plot(deconv_kernel_5.as_array()[center_slice, :, profile_axis], label='Deconvolved (Kernel)')
-plt.plot(deconv_rl_5.as_array()[center_slice, :, profile_axis], label='Deconvolved (RL)')
+plt.plot(deconv_kernel_100.as_array()[center_slice, :, profile_axis], label='Deconvolved (Kernel)')
+plt.plot(deconv_rl_20.as_array()[center_slice, :, profile_axis], label='Deconvolved (RL)')
 plt.plot(deconv_dtv.as_array()[center_slice, :, profile_axis], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, :, profile_axis], label='OSEM')
 plt.plot(images['PET'].as_array()[center_slice, :, profile_axis], label='Ground Truth')
@@ -327,8 +327,8 @@ plt.savefig(os.path.join(data_dir, 'profile_comparison_center.png'))
 # %%
 # Plot profile through a specific row (e.g., row 20) of the center slice.
 plt.figure(figsize=(15, 5))
-plt.plot(deconv_kernel_5.as_array()[center_slice, 20], label='Deconvolved (Kernel)')
-plt.plot(deconv_rl_5.as_array()[center_slice, 20], label='Deconvolved (RL)')
+plt.plot(deconv_kernel_100.as_array()[center_slice, 20], label='Deconvolved (Kernel)')
+plt.plot(deconv_rl_20.as_array()[center_slice, 20], label='Deconvolved (RL)')
 plt.plot(deconv_dtv.as_array()[center_slice, 20], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, 20], label='OSEM')
 plt.plot(images['PET'].as_array()[center_slice, 20], label='Ground Truth')
