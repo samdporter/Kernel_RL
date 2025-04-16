@@ -1,2 +1,3 @@
 data
 tmp*.*s
+__pycache__
