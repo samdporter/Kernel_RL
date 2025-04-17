@@ -9,9 +9,9 @@
 # Global Parameters
 NOISE_SEED = 5
 BW_SEED = 1337
-RL_ITERATIONS_KERNEL = 10      # Iterations for kernel-guided RL deconvolution
-RL_ITERATIONS_STANDARD = 5      # Iterations for standard RL deconvolution
-DTV_ITERATIONS = 10             # Iterations for directional TV deconvolution (MAPRL)
+RL_ITERATIONS_KERNEL = 100      # Iterations for kernel-guided RL deconvolution
+RL_ITERATIONS_STANDARD = 20      # Iterations for standard RL deconvolution
+DTV_ITERATIONS = 100             # Iterations for directional TV deconvolution (MAPRL)
 ALPHA = 0.02                     # Regularization parameter for TV prior
 STEP_SIZE = 0.1                  # Step size for the MAPRL algorithm
 RELAXATION_ETA = 0.01            # Relaxation parameter for MAPRL
@@ -24,8 +24,8 @@ BACKEND='numba' # backend for kernel operator. Won't fit on GPU so either 'numba
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
-KERNEL_SIGMA_ANAT = 1.0
-KERNEL_SIGMA_DIST = 1.0
+KERNEL_SIGMA_ANAT = 0.2
+KERNEL_SIGMA_DIST = 3.0
 KERNEL_TYPE = 'neighbourhood'
 KERNEL_NORMALIZE_FEATURES = True
 KERNEL_NORMALIZE_KERNEL = True
@@ -81,6 +81,11 @@ from my_kem import get_kernel_operator
 from directional_operator import DirectionalOperator
 from map_rl import MAPRL
 from gaussian_blurring import create_gaussian_blur
+# if torch available, use it
+try:
+    from gradient import GradientOperator
+except ImportError:
+    from cil.optimisation.operators import GradientOperator
 
 
 def fwhm_to_sigma(fwhm):
@@ -197,14 +202,14 @@ fig3 = show2D([deconv_rl, images['OSEM']],
               title=['Deconvolved (RL)', 'OSEM'],
               origin='upper', num_cols=2,
               fix_range=[(0, 320), (0, 320)])
-fig3.save(os.path.join(data_dir, 'deconv_rl_20_iter_difference.png'))
+fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_difference.png'))
 
 # Plot objective function for standard RL.
 plt.figure()
 plt.plot(obj_values_rl)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_objective.png'))
+plt.savefig(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_objective.png'))
 
 # %%
 # Define kernel parameters using the global kernel constants.
@@ -238,18 +243,12 @@ deconv_kernel_alpha, obj_values_kernel = richardson_lucy(
 deconv_kernel = kernel_op.direct(deconv_kernel_alpha)
 
 # %%
-# Display the deconvolved image and kernel coefficients.
-fig1 = show2D([deconv_kernel, deconv_kernel_alpha],
-              fix_range=[(0, 320), (0, 320)])
-fig1.save(os.path.join(data_dir, 'deconv_kernel_100_iter.png'))
-
-# %%
 # Display comparison: deconvolved image, OSEM, ground truth, and difference image.
 fig2 = show2D([deconv_kernel, images['OSEM']],
               title=['Deconvolved', 'OSEM'],
               origin='upper', num_cols=2,
               fix_range=[(0, 320), (0, 320)])
-fig2.save(os.path.join(data_dir, 'deconv_kernel_100_iter_difference.png'))
+fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_difference.png'))
 
 # %%
 # Plot objective function values for kernel-guided deconvolution.
@@ -257,7 +256,7 @@ plt.figure()
 plt.plot(obj_values_kernel)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_kernel_100_iter_objective.png'))
+plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_objective.png'))
 
 
 # %%
@@ -267,7 +266,7 @@ f = fn.KullbackLeibler(b=images['OSEM'], eta=images['OSEM'].get_uniform_copy(1e-
 df = fn.OperatorCompositionFunction(f, blurring_operator)
 
 # Prior term: using ALPHA from the global parameters.
-grad = op.GradientOperator(images['OSEM'])
+grad = GradientOperator(images['OSEM'])
 grad_ref = grad.direct(images['T1'])
 d_op = op.CompositionOperator(DirectionalOperator(grad_ref), grad)
 prior = ALPHA * fn.OperatorCompositionFunction(fn.SmoothMixedL21Norm(epsilon=1e-4), d_op)
@@ -280,18 +279,17 @@ deconv_dtv = maprl.solution
 
 # %%
 # Display deconvolved image and difference image (DTV).
-difference_image_dtv = deconv_dtv - images['PET']
 fig4 = show2D([deconv_dtv, images['OSEM']],
               title=['Deconvolved (DTV)', 'OSEM'],
               origin='upper', num_cols=4,
               fix_range=[(0, 320), (0, 320)])
-fig4.save(os.path.join(data_dir, 'deconv_dtv_difference.png'))
+fig4.save(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_difference.png'))
 
 plt.figure(figsize=(15, 5))
 plt.plot(maprl.objective)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_dtv_objective.png'))
+plt.savefig(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_objective.png'))
 
 # %%
 # Plot profiles through the central slices for comparison.
