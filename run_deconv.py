@@ -17,6 +17,9 @@ STEP_SIZE = 0.1                  # Step size for the MAPRL algorithm
 RELAXATION_ETA = 0.01            # Relaxation parameter for MAPRL
 UPDATE_OBJ_INTERVAL = 1          # Objective function update interval
 PSF_KERNEL_SIZE = 5              # Size of the PSF kernel along each dimension
+FWHM_VALUES = [4.0, 4.0, 4.0]   # FWHM values for the PSF kernel in mm
+EMISSION_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_PET_MNI.nii"
+GUIDANCE_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_T1_MNI.nii"
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
@@ -50,6 +53,7 @@ for name, val in [
 # %%
 import os
 import re
+import sys
 import subprocess
 
 import matplotlib.pyplot as plt
@@ -66,30 +70,17 @@ from cil.utilities.display import show2D
 msg = pet.MessageRedirector()
 
 # %%
-from src.my_kem import get_kernel_operator
-from src.directional_operator import DirectionalOperator
-from src.map_rl import MAPRL
-
-# %%
 # Determine script and data directories.
 script_dir = os.path.dirname(os.path.abspath(__file__))
 data_dir = os.path.join(script_dir, 'data')
 
-# %%
-def find_fwhm_in_image(file_path):
-    """
-    Run STIR's 'find_fwhm_in_image' utility and parse its output
-    to extract full-width-at-half-maximum (FWHM) values for each axis.
-    """
-    result = subprocess.run(['find_fwhm_in_image', file_path],
-                            capture_output=True, text=True)
-    if result.returncode != 0:
-        print("Error running command:", result.stderr)
-        return None
-    fwhm_regex = r"The resolution in (.*) axis is ([\d.]+)"
-    matches = re.findall(fwhm_regex, result.stdout)
-    fwhm_values = {axis: float(value) for axis, value in matches}
-    return fwhm_values
+# %% import modules from this repository
+sys.path.append(os.path.join(script_dir, 'src'))
+from my_kem import get_kernel_operator
+from directional_operator import DirectionalOperator
+from map_rl import MAPRL
+from gaussian_blurring import create_gaussian_blur
+
 
 def fwhm_to_sigma(fwhm):
     """
@@ -119,25 +110,29 @@ def psf(kernel_size, fwhm, voxel_size=(1, 1, 1)):
     return kernel_3d / np.sum(kernel_3d)
 
 # %%
-# Load images generated in the previous notebook.
-image_names = ['PET', 'T1', 'uMap']
+
 images = {}
-for name in image_names:
-    image_path = os.path.join(data_dir, f'{name}_b{BW_SEED}.hv')
-    images[name] = pet.ImageData(image_path)
-
 # Load OSEM and PSF images.
-images['OSEM'] = pet.ImageData(os.path.join(data_dir, f'OSEM_b{BW_SEED}_n{NOISE_SEED}.hv'))
-images['OSEM_psf'] = pet.ImageData(os.path.join(data_dir, f'OSEM_psf_n{NOISE_SEED}.hv'))
-
-# %%
-# Estimate FWHM from the point source measurement.
-fwhm_values = list(find_fwhm_in_image(os.path.join(data_dir, f'OSEM_psf_n{NOISE_SEED}.hv')).values())
-print(f'FWHM: {fwhm_values}')
+images['OSEM'] = pet.ImageData(EMISSION_PATH)
+images['T1'] = pet.ImageData(GUIDANCE_PATH)
 
 # Generate the PSF kernel and set up the blurring operator.
-psf_kernel = psf(PSF_KERNEL_SIZE, fwhm=fwhm_values, voxel_size=images['OSEM'].voxel_sizes())
-blurring_operator = BlurringOperator(psf_kernel, images['PET'])
+psf_kernel = psf(PSF_KERNEL_SIZE, fwhm=FWHM_VALUES, voxel_size=images['OSEM'].voxel_sizes())
+
+# if cupy is available, use it
+try:
+    blurring_operator = create_gaussian_blur(
+        fwhm_to_sigma(FWHM_VALUES),
+        images['OSEM'],
+        backend='auto'
+    )
+except ImportError:
+    print("cupy not available, using numpy")
+    blurring_operator = BlurringOperator(
+        psf_kernel, 
+        images['OSEM']
+    )
+
 
 # %%
 def richardson_lucy(observed, blur_op, iterations, epsilon=1e-10,
@@ -186,6 +181,29 @@ def richardson_lucy(observed, blur_op, iterations, epsilon=1e-10,
     return current_estimate, objective_values
 
 # %%
+# Run standard Richardson–Lucy deconvolution (without kernel guidance).
+deconv_rl, obj_values_rl = richardson_lucy(
+    images['OSEM'], blurring_operator,
+    iterations=RL_ITERATIONS_STANDARD,
+    ground_truth=None
+)
+
+# %%
+# Display comparison for standard RL deconvolution.
+fig3 = show2D([deconv_rl, images['OSEM']],
+              title=['Deconvolved (RL)', 'OSEM'],
+              origin='upper', num_cols=2,
+              fix_range=[(0, 320), (0, 320)])
+fig3.save(os.path.join(data_dir, 'deconv_rl_20_iter_difference.png'))
+
+# Plot objective function for standard RL.
+plt.figure()
+plt.plot(obj_values_rl)
+plt.xlabel('Iteration')
+plt.ylabel('Objective Function Value')
+plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_objective.png'))
+
+# %%
 # Define kernel parameters using the global kernel constants.
 kernel_params = {
     'num_neighbours': KERNEL_NUM_NEIGHBOURS,
@@ -202,11 +220,11 @@ kernel_op.set_anatomical_image(images['T1'])
 
 # %%
 # Run kernel-guided Richardson–Lucy deconvolution using global iteration value.
-deconv_kernel_alpha, obj_values_kernel, rmse_values_kernel = richardson_lucy(
+deconv_kernel_alpha, obj_values_kernel = richardson_lucy(
     images['OSEM'],
     blurring_operator,
     iterations=RL_ITERATIONS_KERNEL,
-    ground_truth=images['PET'],
+    ground_truth=None,
     kernel_operator=kernel_op
 )
 
@@ -221,11 +239,10 @@ fig1.save(os.path.join(data_dir, 'deconv_kernel_100_iter.png'))
 
 # %%
 # Display comparison: deconvolved image, OSEM, ground truth, and difference image.
-difference_image = deconv_kernel - images['PET']
-fig2 = show2D([deconv_kernel, images['OSEM'], images['PET'], difference_image],
-              title=['Deconvolved', 'OSEM', 'Ground Truth', 'Difference (Deconv - GT)'],
-              origin='upper', num_cols=4,
-              fix_range=[(0, 320), (0, 320), (0, 320), (-100, 100)])
+fig2 = show2D([deconv_kernel, images['OSEM']],
+              title=['Deconvolved', 'OSEM'],
+              origin='upper', num_cols=2,
+              fix_range=[(0, 320), (0, 320)])
 fig2.save(os.path.join(data_dir, 'deconv_kernel_100_iter_difference.png'))
 
 # %%
@@ -236,44 +253,6 @@ plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
 plt.savefig(os.path.join(data_dir, 'deconv_kernel_100_iter_objective.png'))
 
-# %%
-# Plot RMSE for kernel-guided deconvolution.
-plt.figure()
-plt.plot(rmse_values_kernel)
-plt.xlabel('Iteration')
-plt.ylabel('RMSE')
-plt.savefig(os.path.join(data_dir, 'deconv_kernel_100_iter_rmse.png'))
-
-# %%
-# Run standard Richardson–Lucy deconvolution (without kernel guidance).
-deconv_rl, obj_values_rl, rmse_values_rl = richardson_lucy(
-    images['OSEM'], blurring_operator,
-    iterations=RL_ITERATIONS_STANDARD,
-    ground_truth=images['PET']
-)
-
-# %%
-# Display comparison for standard RL deconvolution.
-difference_image_rl = deconv_rl - images['PET']
-fig3 = show2D([deconv_rl, images['OSEM'], images['PET'], difference_image_rl],
-              title=['Deconvolved (RL)', 'OSEM', 'Ground Truth', 'Difference (RL - GT)'],
-              origin='upper', num_cols=4,
-              fix_range=[(0, 320), (0, 320), (0, 320), (-100, 100)])
-fig3.save(os.path.join(data_dir, 'deconv_rl_20_iter_difference.png'))
-
-# Plot objective function for standard RL.
-plt.figure()
-plt.plot(obj_values_rl)
-plt.xlabel('Iteration')
-plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_objective.png'))
-
-# Plot RMSE for standard RL.
-plt.figure()
-plt.plot(rmse_values_rl)
-plt.xlabel('Iteration')
-plt.ylabel('RMSE')
-plt.savefig(os.path.join(data_dir, 'deconv_rl_20_iter_rmse.png'))
 
 # %%
 # Set up directional TV deconvolution.
@@ -296,10 +275,10 @@ deconv_dtv = maprl.solution
 # %%
 # Display deconvolved image and difference image (DTV).
 difference_image_dtv = deconv_dtv - images['PET']
-fig4 = show2D([deconv_dtv, images['OSEM'], images['PET'], difference_image_dtv],
-              title=['Deconvolved (DTV)', 'OSEM', 'Ground Truth', 'Difference (DTV - GT)'],
+fig4 = show2D([deconv_dtv, images['OSEM']],
+              title=['Deconvolved (DTV)', 'OSEM'],
               origin='upper', num_cols=4,
-              fix_range=[(0, 320), (0, 320), (0, 320), (-100, 100)])
+              fix_range=[(0, 320), (0, 320)])
 fig4.save(os.path.join(data_dir, 'deconv_dtv_difference.png'))
 
 plt.figure(figsize=(15, 5))
@@ -318,7 +297,6 @@ plt.plot(deconv_kernel.as_array()[center_slice, :, profile_axis], label='Deconvo
 plt.plot(deconv_rl.as_array()[center_slice, :, profile_axis], label='Deconvolved (RL)')
 plt.plot(deconv_dtv.as_array()[center_slice, :, profile_axis], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, :, profile_axis], label='OSEM')
-plt.plot(images['PET'].as_array()[center_slice, :, profile_axis], label='Ground Truth')
 plt.legend()
 plt.savefig(os.path.join(data_dir, 'profile_comparison_center.png'))
 
@@ -329,6 +307,5 @@ plt.plot(deconv_kernel.as_array()[center_slice, 20], label='Deconvolved (Kernel)
 plt.plot(deconv_rl.as_array()[center_slice, 20], label='Deconvolved (RL)')
 plt.plot(deconv_dtv.as_array()[center_slice, 20], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, 20], label='OSEM')
-plt.plot(images['PET'].as_array()[center_slice, 20], label='Ground Truth')
 plt.legend()
 plt.savefig(os.path.join(data_dir, 'profile_comparison_row20.png'))
