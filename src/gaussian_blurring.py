@@ -72,12 +72,16 @@ class GaussianBlurringOperator(LinearOperator):
             blurred = F.conv3d(t, self.psf_t,
                                padding=(kd//2,kh//2,kw//2)
                               ).squeeze().cpu().numpy()
+            del t
+            self.clear_gpu()
         elif self.backend == 'cupy':
             cp_x = self.cp.asarray(arr)
             cp_psf = self.cp.asarray(self.psf)
             blurred =self.cp.asnumpy(
                 self.cndimage.convolve(cp_x, cp_psf, mode='reflect')
             )
+            del cp_x, cp_psf
+            self.clear_gpu()
         elif self.backend == 'numba':
             blurred = _numba_convolve_3d(arr, self.psf)
         else:  # scipy
@@ -99,12 +103,16 @@ class GaussianBlurringOperator(LinearOperator):
             result = F.conv3d(t, psf_flip,
                               padding=(kd//2,kh//2,kw//2)
                              ).squeeze().cpu().numpy()
+            del t
+            self.clear_gpu()
         elif self.backend == 'cupy':
             cp_x = self.cp.asarray(arr)
             cp_psf = self.cp.asarray(self.psf)
             result = self.cp.asnumpy(
                 self.cndimage.correlate(cp_x, cp_psf, mode='reflect')
             )
+            del cp_x, cp_psf
+            self.clear_gpu()
         elif self.backend == 'numba':
             # Flip the PSF for cross-correlation (adjoint)
             psf_flipped = self.psf[::-1, ::-1, ::-1]
@@ -116,11 +124,20 @@ class GaussianBlurringOperator(LinearOperator):
             out = x.clone()
         out.fill(result)
         return out
+    
+    def clear_gpu(self):
+        """Release any cached GPU memory."""
+        if self.backend == 'torch':
+            # free PyTorch’s CUDA cache
+            self.torch.cuda.empty_cache()
+        elif self.backend == 'cupy':
+            # free all blocks in CuPy’s default memory pool
+            self.cp.get_default_memory_pool().free_all_blocks()
 
 
 def create_gaussian_blur(sigma, geometry, backend=None):
     """
     Factory: returns a GaussianBlurringOperator,
-    defaulting to cupy → numba → torch → scipy.
+    defaulting to cupy → torch → numba → scipy.
     """
     return GaussianBlurringOperator(sigma, geometry, backend or 'auto')

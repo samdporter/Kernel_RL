@@ -18,7 +18,7 @@ def create_fake_image(dimensions=(64, 64, 64)):
 
 # Test the backend with different configurations
 def test_blurring_operator(backend='numba',
-                           dimensions=(87, 185, 185),
+                           dimensions=(181, 217, 181),
                            repetitions=10):
     # Create fake image
     image = create_fake_image(dimensions)
@@ -45,8 +45,10 @@ if __name__ == '__main__':
     times = {}
     for backend in backends:
         print(f"Testing {backend} backend:")
-        times[backend] = test_blurring_operator(backend)
-
+        try:
+            times[backend] = test_blurring_operator(backend)
+        except Exception as e:
+            print(f"Error with {backend}: {e}")
     # Print out the times for comparison
     print("\n--- Results ---")
     for backend, time_taken in times.items():
