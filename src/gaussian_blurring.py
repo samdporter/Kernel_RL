@@ -78,7 +78,6 @@ class GaussianBlurringOperator(LinearOperator):
             blurred =self.cp.asnumpy(
                 self.cndimage.convolve(cp_x, cp_psf, mode='reflect')
             )
-            return self.cp.asnumpy(blurred)
         elif self.backend == 'numba':
             blurred = _numba_convolve_3d(arr, self.psf)
         else:  # scipy
@@ -102,8 +101,9 @@ class GaussianBlurringOperator(LinearOperator):
                              ).squeeze().cpu().numpy()
         elif self.backend == 'cupy':
             cp_x = self.cp.asarray(arr)
+            cp_psf = self.cp.asarray(self.psf)
             result = self.cp.asnumpy(
-                self.cndimage.correlate(cp_x, self.psf, mode='reflect')
+                self.cndimage.correlate(cp_x, cp_psf, mode='reflect')
             )
         elif self.backend == 'numba':
             # Flip the PSF for cross-correlation (adjoint)
