@@ -9,9 +9,9 @@
 # Global Parameters
 NOISE_SEED = 5
 BW_SEED = 1337
-RL_ITERATIONS_KERNEL = 100       # Iterations for kernel-guided RL deconvolution
-RL_ITERATIONS_STANDARD = 20      # Iterations for standard RL deconvolution
-DTV_ITERATIONS = 100             # Iterations for directional TV deconvolution (MAPRL)
+RL_ITERATIONS_KERNEL = 10      # Iterations for kernel-guided RL deconvolution
+RL_ITERATIONS_STANDARD = 5      # Iterations for standard RL deconvolution
+DTV_ITERATIONS = 10             # Iterations for directional TV deconvolution (MAPRL)
 ALPHA = 0.02                     # Regularization parameter for TV prior
 STEP_SIZE = 0.1                  # Step size for the MAPRL algorithm
 RELAXATION_ETA = 0.01            # Relaxation parameter for MAPRL
@@ -20,6 +20,7 @@ PSF_KERNEL_SIZE = 5              # Size of the PSF kernel along each dimension
 FWHM_VALUES = [4.0, 4.0, 4.0]   # FWHM values for the PSF kernel in mm
 EMISSION_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_PET_MNI.nii"
 GUIDANCE_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_T1_MNI.nii"
+BACKEND='numba' # backend for kernel operator. Won't fit on GPU so either 'numba' or 'python'
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
@@ -116,6 +117,8 @@ images = {}
 images['OSEM'] = pet.ImageData(EMISSION_PATH)
 images['T1'] = pet.ImageData(GUIDANCE_PATH)
 
+print(f"size of OSEM image: {images['OSEM'].shape}")
+
 # Generate the PSF kernel and set up the blurring operator.
 psf_kernel = psf(PSF_KERNEL_SIZE, fwhm=FWHM_VALUES, voxel_size=images['OSEM'].voxel_sizes())
 
@@ -124,7 +127,7 @@ try:
     blurring_operator = create_gaussian_blur(
         fwhm_to_sigma(FWHM_VALUES),
         images['OSEM'],
-        backend='auto'
+        backend='auto',
     )
 except ImportError:
     print("cupy not available, using numpy")
@@ -214,7 +217,10 @@ kernel_params = {
     'normalize_kernel': KERNEL_NORMALIZE_KERNEL,
 }
 
-kernel_op = get_kernel_operator(images['OSEM'])
+kernel_op = get_kernel_operator(
+    images['OSEM'],
+    backend=BACKEND,
+)
 kernel_op.parameters = kernel_params
 kernel_op.set_anatomical_image(images['T1'])
 
