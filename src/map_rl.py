@@ -14,8 +14,6 @@ class MAPRL(Algorithm):
         self.data_fidelity = data_fidelity
         self.prior = prior
 
-        self.FOV_filter = TruncateToCylinderProcessor()
-
         super(MAPRL, self).__init__(**kwargs)
         self.configured = True
 
@@ -27,7 +25,6 @@ class MAPRL(Algorithm):
         
         grad = self.data_fidelity.gradient(self.x) + self.prior.gradient(self.x)
         self.x = self.x - (self.x + self.eps) * grad * self.step_size()
-        self.FOV_filter.apply(self.x)
         self.x.maximum(0, out=self.x)
 
     def update_objective(self):
