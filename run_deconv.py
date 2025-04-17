@@ -10,9 +10,9 @@
 NOISE_SEED = 5
 BW_SEED = 1337
 RL_ITERATIONS_KERNEL = 100      # Iterations for kernel-guided RL deconvolution
-RL_ITERATIONS_STANDARD = 20      # Iterations for standard RL deconvolution
+RL_ITERATIONS_STANDARD = 100      # Iterations for standard RL deconvolution
 DTV_ITERATIONS = 100             # Iterations for directional TV deconvolution (MAPRL)
-ALPHA = 0.02                     # Regularization parameter for TV prior
+ALPHA = 0.1                     # Regularization parameter for TV prior
 STEP_SIZE = 0.1                  # Step size for the MAPRL algorithm
 RELAXATION_ETA = 0.01            # Relaxation parameter for MAPRL
 UPDATE_OBJ_INTERVAL = 1          # Objective function update interval
@@ -21,10 +21,11 @@ FWHM_VALUES = [4.0, 4.0, 4.0]   # FWHM values for the PSF kernel in mm
 EMISSION_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_PET_MNI.nii"
 GUIDANCE_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_T1_MNI.nii"
 BACKEND='numba' # backend for kernel operator. Won't fit on GPU so either 'numba' or 'python'
+SHOW_PLOTS = False
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
-KERNEL_SIGMA_ANAT = 0.2
+KERNEL_SIGMA_ANAT = 0.5
 KERNEL_SIGMA_DIST = 3.0
 KERNEL_TYPE = 'neighbourhood'
 KERNEL_NORMALIZE_FEATURES = True
@@ -116,13 +117,44 @@ def psf(kernel_size, fwhm, voxel_size=(1, 1, 1)):
     return kernel_3d / np.sum(kernel_3d)
 
 # %%
+if not SHOW_PLOTS:
+    # Override plt.show with a no-op
+    plt.show = lambda *args, **kwargs: None
 
+# %%
 images = {}
 # Load OSEM and PSF images.
 images['OSEM'] = pet.ImageData(EMISSION_PATH)
 images['T1'] = pet.ImageData(GUIDANCE_PATH)
 
+# need to flip the T1 image along axis1
+t1_arr = images['T1'].as_array()
+t1_arr = np.flip(t1_arr, axis=1)
+images['T1'].fill(t1_arr)
+
+# Display the images
+fig0 = show2D([images['OSEM'], images['T1']],
+                title=['OSEM', 'T1'],
+                origin='upper', num_cols=2,
+                fix_range=[(0, 320), (0, 1000)])
+fig0.save(os.path.join(data_dir, 'OSEM_T1.png'))
+
+# display the images at a wuarter sluce
+fig, ax = plt.subplots(2, 2, figsize=(10, 5))
+ax[0,0].imshow(images['OSEM'].as_array()[images['OSEM'].shape[0]//4], cmap='gray')
+ax[0,0].set_title('OSEM')
+ax[0,1].imshow(images['T1'].as_array()[images['T1'].shape[0]//4], cmap='gray')
+ax[0,1].set_title('T1')
+#now 3/4
+ax[1,0].imshow(images['OSEM'].as_array()[3*images['OSEM'].shape[0]//4], cmap='gray')
+ax[1,0].set_title('OSEM')
+ax[1,1].imshow(images['T1'].as_array()[3*images['T1'].shape[0]//4], cmap='gray')
+ax[1,1].set_title('T1')
+plt.savefig(os.path.join(data_dir, 'OSEM_T1_quarter_slices.png'))
+plt.close()
+
 print(f"size of OSEM image: {images['OSEM'].shape}")
+print(f"size of T1 image: {images['T1'].shape}")
 
 # Generate the PSF kernel and set up the blurring operator.
 psf_kernel = psf(PSF_KERNEL_SIZE, fwhm=FWHM_VALUES, voxel_size=images['OSEM'].voxel_sizes())
@@ -202,14 +234,18 @@ fig3 = show2D([deconv_rl, images['OSEM']],
               title=['Deconvolved (RL)', 'OSEM'],
               origin='upper', num_cols=2,
               fix_range=[(0, 320), (0, 320)])
-fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_difference.png'))
+fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_difference.png'))
 
 # Plot objective function for standard RL.
 plt.figure()
 plt.plot(obj_values_rl)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_objective.png'))
+plt.savefig(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_objective.png'))
+
+# save the output
+deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.hv'))
+deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.nii'))
 
 # %%
 # Define kernel parameters using the global kernel constants.
@@ -248,7 +284,7 @@ fig2 = show2D([deconv_kernel, images['OSEM']],
               title=['Deconvolved', 'OSEM'],
               origin='upper', num_cols=2,
               fix_range=[(0, 320), (0, 320)])
-fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_difference.png'))
+fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_difference.png'))
 
 # %%
 # Plot objective function values for kernel-guided deconvolution.
@@ -256,8 +292,11 @@ plt.figure()
 plt.plot(obj_values_kernel)
 plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_objective.png'))
+plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_iter_objective.png'))
 
+# save the output
+deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist.hv'))
+deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist.nii'))
 
 # %%
 # Set up directional TV deconvolution.
@@ -291,6 +330,10 @@ plt.xlabel('Iteration')
 plt.ylabel('Objective Function Value')
 plt.savefig(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_objective.png'))
 
+# save the output
+deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.hv'))
+deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.nii'))
+
 # %%
 # Plot profiles through the central slices for comparison.
 center_slice = deconv_kernel.shape[0] // 2
@@ -302,14 +345,5 @@ plt.plot(deconv_rl.as_array()[center_slice, :, profile_axis], label='Deconvolved
 plt.plot(deconv_dtv.as_array()[center_slice, :, profile_axis], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, :, profile_axis], label='OSEM')
 plt.legend()
-plt.savefig(os.path.join(data_dir, 'profile_comparison_center.png'))
-
-# %%
-# Plot profile along a specific row (e.g., row 20) of the center slice.
-plt.figure(figsize=(15, 5))
-plt.plot(deconv_kernel.as_array()[center_slice, 20], label='Deconvolved (Kernel)')
-plt.plot(deconv_rl.as_array()[center_slice, 20], label='Deconvolved (RL)')
-plt.plot(deconv_dtv.as_array()[center_slice, 20], label='Deconvolved (DTV)')
-plt.plot(images['OSEM'].as_array()[center_slice, 20], label='OSEM')
-plt.legend()
-plt.savefig(os.path.join(data_dir, 'profile_comparison_row20.png'))
+# long save path with all algorithm hyperparameters
+plt.savefig(os.path.join(data_dir, f'profile_comparison_center_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_{ALPHA}_alpha.png'))
