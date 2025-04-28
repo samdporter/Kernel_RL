@@ -3,48 +3,60 @@ import time
 import sirf.STIR as pet
 from my_kem import get_kernel_operator
 
-# Create a fake image using sirf.STIR
-def create_fake_image(dimensions=(64, 64, 64)):
-    image = pet.ImageData()
-    image.initialise(dimensions, (1.0, 1.0, 1.0))
-    image.fill(np.random.rand(*dimensions))
-    return image
+# fix the NumPy RNG so that .rand() is reproducible
+np.random.seed(0)
 
-# Test each backend implementation
-def test_kernel_operator(backend, dimensions=(181, 217, 181), reps=10):
-    # Prepare image
-    image = create_fake_image(dimensions)
-    # Select backend flags
-    flags = {'use_torch': False, 'use_cupy': False, 'use_numba': False}
-    if backend == 'torch':
-        flags['use_torch'] = True
-    elif backend == 'cupy':
-        flags['use_cupy'] = True
-    elif backend == 'numba':
-        flags['use_numba'] = True
-    # Create operator
-    op = get_kernel_operator(image, **flags)
+def create_fake_image(dimensions=(64,64,64)):
+    """Generate one random image; seed is already global."""
+    img = pet.ImageData()
+    img.initialise(dimensions, (1.,1.,1.))
+    img.fill(np.random.rand(*dimensions))
+    return img
+
+def test_kernel_operator(backend, image, reps=5):
+    op = get_kernel_operator(image, backend=backend)
     op.set_anatomical_image(image)
-    # Warm-up
-    _ = op.direct(image)
-    # Time the direct (apply) operation
-    start = time.time()
+
+    # warm-up + reference forward/adjoint
+    fwd = op.direct(image); adj = op.adjoint(image)
+    fwd_arr = fwd.as_array().copy()
+    adj_arr = adj.as_array().copy()
+
+    # timing only the forward
+    t0 = time.time()
     for _ in range(reps):
         _ = op.direct(image)
-    elapsed = (time.time() - start) / reps
-    print(f"[{backend}] avg time: {elapsed:.6f}s")
-    return elapsed
+    elapsed = (time.time() - t0)/reps
 
-if __name__ == '__main__':
-    backends = ['torch', 'cupy', 'numba', 'python']
+    print(f"[{backend:6s}] avg forward time: {elapsed:.4f}s")
+    return fwd_arr, adj_arr, elapsed
+
+if __name__ == "__main__":
+    dimensions = (64,64,64)
+    # generate *one* image for all backends
+    base_image = create_fake_image(dimensions)
+
+    backends = ['python','numba','torch']
     results = {}
     for b in backends:
-        print(f"Testing {b} backend...")
+        print(f"Testing {b!r} backend…")
         try:
-            results[b] = test_kernel_operator(b)
+            fwd, adj, t = test_kernel_operator(b, base_image)
+            results[b] = {'fwd':fwd, 'adj':adj, 'time':t}
         except Exception as e:
-            print(f"{b} failed: {e}")
+            print(f"  {b!r} failed: {e}")
 
-    print("\n--- Summary ---")
-    for b, t in results.items():
-        print(f"{b}: {t:.6f} s")
+    # consistency vs Python
+    ref = results.get('python')
+    if ref:
+        print("\n--- Consistency vs Python ---")
+        for b, data in results.items():
+            if b=='python': continue
+            ok_f = np.allclose(data['fwd'], ref['fwd'], rtol=1e-6, atol=1e-8)
+            ok_a = np.allclose(data['adj'], ref['adj'], rtol=1e-6, atol=1e-8)
+            print(f"{b:6s} forward match: {ok_f}, adjoint match: {ok_a}")
+
+    # timing summary
+    print("\n--- Timings (s) ---")
+    for b, d in results.items():
+        print(f"{b:6s}: {d['time']:.4f}")
