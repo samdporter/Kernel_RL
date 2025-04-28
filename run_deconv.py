@@ -5,13 +5,14 @@
 # These global constants (e.g., iteration numbers, seed values, kernel parameters)
 # are then used throughout the analysis.
 
+from sirf.Utilities import examples_data_path
 # %%
 # Global Parameters
 NOISE_SEED = 5
 BW_SEED = 1337
-RL_ITERATIONS_KERNEL = 100      # Iterations for kernel-guided RL deconvolution
-RL_ITERATIONS_STANDARD = 100      # Iterations for standard RL deconvolution
-DTV_ITERATIONS = 100             # Iterations for directional TV deconvolution (MAPRL)
+RL_ITERATIONS_KERNEL = 50     # Iterations for kernel-guided RL deconvolution
+RL_ITERATIONS_STANDARD = 50      # Iterations for standard RL deconvolution
+DTV_ITERATIONS = 50           # Iterations for directional TV deconvolution (MAPRL)
 ALPHA = 0.1                     # Regularization parameter for TV prior
 STEP_SIZE = 0.1                  # Step size for the MAPRL algorithm
 RELAXATION_ETA = 0.01            # Relaxation parameter for MAPRL
@@ -30,6 +31,7 @@ KERNEL_SIGMA_DIST = 3.0
 KERNEL_TYPE = 'neighbourhood'
 KERNEL_NORMALIZE_FEATURES = True
 KERNEL_NORMALIZE_KERNEL = True
+KERNEL_PROPORTION_OF_NEIGHBOURS = 0.5
 
 # Display global parameters for reference.
 for name, val in [
@@ -136,7 +138,7 @@ images['T1'].fill(t1_arr)
 fig0 = show2D([images['OSEM'], images['T1']],
                 title=['OSEM', 'T1'],
                 origin='upper', num_cols=2,
-                fix_range=[(0, 320), (0, 1000)])
+                fix_range=[(0, 300), (0, 1000)])
 fig0.save(os.path.join(data_dir, 'OSEM_T1.png'))
 
 # display the images at a wuarter sluce
@@ -233,7 +235,7 @@ deconv_rl, obj_values_rl = richardson_lucy(
 fig3 = show2D([deconv_rl, images['OSEM']],
               title=['Deconvolved (RL)', 'OSEM'],
               origin='upper', num_cols=2,
-              fix_range=[(0, 320), (0, 320)])
+              fix_range=[(0, 300), (0, 300)])
 fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_difference.png'))
 
 # Plot objective function for standard RL.
@@ -256,6 +258,7 @@ kernel_params = {
     'kernel_type': KERNEL_TYPE,
     'normalize_features': KERNEL_NORMALIZE_FEATURES,
     'normalize_kernel': KERNEL_NORMALIZE_KERNEL,
+    'prop_features': KERNEL_PROPORTION_OF_NEIGHBOURS,
 }
 
 kernel_op = get_kernel_operator(
@@ -283,7 +286,7 @@ deconv_kernel = kernel_op.direct(deconv_kernel_alpha)
 fig2 = show2D([deconv_kernel, images['OSEM']],
               title=['Deconvolved', 'OSEM'],
               origin='upper', num_cols=2,
-              fix_range=[(0, 320), (0, 320)])
+              fix_range=[(0, 300), (0, 300)])
 fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_difference.png'))
 
 # %%
@@ -321,7 +324,7 @@ deconv_dtv = maprl.solution
 fig4 = show2D([deconv_dtv, images['OSEM']],
               title=['Deconvolved (DTV)', 'OSEM'],
               origin='upper', num_cols=4,
-              fix_range=[(0, 320), (0, 320)])
+              fix_range=[(0, 300), (0, 300)])
 fig4.save(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_difference.png'))
 
 plt.figure(figsize=(15, 5))
@@ -347,3 +350,5 @@ plt.plot(images['OSEM'].as_array()[center_slice, :, profile_axis], label='OSEM')
 plt.legend()
 # long save path with all algorithm hyperparameters
 plt.savefig(os.path.join(data_dir, f'profile_comparison_center_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_{ALPHA}_alpha.png'))
+
+# %%
