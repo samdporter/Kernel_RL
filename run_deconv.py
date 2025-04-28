@@ -23,6 +23,7 @@ EMISSION_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_PET_MNI
 GUIDANCE_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_T1_MNI.nii"
 BACKEND='numba' # backend for kernel operator. Won't fit on GPU so either 'numba' or 'python'
 SHOW_PLOTS = False
+FLIP_T1 = True # flip the T1 image along axis 1
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
@@ -130,9 +131,10 @@ images['OSEM'] = pet.ImageData(EMISSION_PATH)
 images['T1'] = pet.ImageData(GUIDANCE_PATH)
 
 # need to flip the T1 image along axis1
-t1_arr = images['T1'].as_array()
-t1_arr = np.flip(t1_arr, axis=1)
-images['T1'].fill(t1_arr)
+if FLIP_T1:
+    t1_arr = images['T1'].as_array()
+    t1_arr = np.flip(t1_arr, axis=1)
+    images['T1'].fill(t1_arr)
 
 # Display the images
 fig0 = show2D([images['OSEM'], images['T1']],
@@ -298,8 +300,8 @@ plt.ylabel('Objective Function Value')
 plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist_iter_objective.png'))
 
 # save the output
-deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist.hv'))
-deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_dist.nii'))
+deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_prop_{KERNEL_PROPORTION_OF_NEIGHBOURS}_neigh.hv'))
+deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_prop_{KERNEL_PROPORTION_OF_NEIGHBOURS}_neigh.nii'))
 
 # %%
 # Set up directional TV deconvolution.
