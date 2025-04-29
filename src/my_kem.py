@@ -1,14 +1,17 @@
 import numpy as np
-import math
-from cil.optimisation.operators import LinearOperator
+np.seterr(over='raise', invalid='raise')
 
-# Try importing optional backends
+from cil.optimisation.operators import LinearOperator
+from numpy.lib.stride_tricks import sliding_window_view
+
+# Try importing numba
 try:
     import numba
     NUMBA_AVAIL = True
 except ImportError:
     NUMBA_AVAIL = False
 
+# Try importing torch
 try:
     import torch
     import torch.nn.functional as F
@@ -16,110 +19,105 @@ try:
 except ImportError:
     TORCH_AVAIL = False
 
-import numpy as np
-import math
-from cil.optimisation.operators import LinearOperator
-
-# optional numba
-try:
-    import numba
-    NUMBA_AVAIL = True
-except ImportError:
-    NUMBA_AVAIL = False
-
 
 def get_kernel_operator(domain_geometry, backend='auto', **kwargs):
+    """
+    Returns the best available kernel operator.
+    backend: 'auto'|'torch'|'numba'|'python'
+    auto order: torch → numba → python
+    """
     if backend == 'auto':
-        backend = 'torch' if TORCH_AVAIL else 'numba' if NUMBA_AVAIL else 'python'
-    if backend == 'numba':
-        return NumbaKernelOperator(domain_geometry, **kwargs)
-    elif backend == 'torch':
+        if TORCH_AVAIL:
+            backend = 'torch'
+        elif NUMBA_AVAIL:
+            backend = 'numba'
+        else:
+            backend = 'python'
+
+    if backend == 'torch' and TORCH_AVAIL:
         return TorchKernelOperator(domain_geometry, **kwargs)
+    elif backend == 'numba' and NUMBA_AVAIL:
+        return NumbaKernelOperator(domain_geometry, **kwargs)
     else:
         return KernelOperator(domain_geometry, **kwargs)
+
+
 class BaseKernelOperator(LinearOperator):
     def __init__(self, domain_geometry, **kwargs):
         super().__init__(domain_geometry=domain_geometry,
                          range_geometry=domain_geometry)
-        # parameters
-        params = {
-            'num_neighbours': 5,
-            'sigma_anat': 2.0,
-            'sigma_dist': 1.0,
-            'prop_features': 1,
+        default_parameters = {
+            'num_neighbours':    5,
+            'sigma_anat':        0.1,
+            'sigma_dist':        0.1,
             'normalize_features': False,
-            'normalize_kernel': False,
+            'normalize_kernel':   False,
+            'use_mask':           False,
+            'mask_k':             None,
+            'recalc_mask':        False,
         }
-        self.parameters = {**params, **kwargs}
+        self.parameters = {**default_parameters, **kwargs}
         self.anatomical_image = None
-        self._feature_masks = None
+        self.mask = None
+        self.backend = 'python'
 
-        # precompute fixed data
-        n = self.parameters['num_neighbours']
-        half = n // 2
-        # all offsets in [-half..half]^3, shape (K,3)
-        coords = np.arange(-half, half+1)
-        grid = np.stack(np.meshgrid(coords, coords, coords, indexing='ij'), -1)
-        self._offsets = grid.reshape(-1, 3).astype(np.int64)  # (K,3)
-
-        # spatial weight per offset, shape (K,)
-        D2 = (self._offsets**2).sum(axis=1)
-        sd = self.parameters['sigma_dist']
-        self._spatial_flat = np.exp(-D2 / (2 * sd * sd))
-
-        # single pad tuple for reflect-padding
-        self._pad = ((half, half), (half, half), (half, half))
-
+    def set_parameters(self, parameters):
+        self.parameters.update(parameters)
+        # clear mask so it will be rebuilt
+        self.mask = None
+        # rebuild torch spatial weights if needed
+        if self.backend == 'torch':
+            n  = self.parameters['num_neighbours']
+            sd = self.parameters['sigma_dist']
+            coords = torch.stack(torch.meshgrid(
+                torch.arange(n), torch.arange(n), torch.arange(n),
+                indexing='ij'), dim=-1).float()
+            c = (n-1)/2
+            D2 = ((coords-c)**2).sum(dim=-1)
+            self._spatial = torch.exp(-D2/(2*sd*sd)).reshape(-1).cuda()
 
     def set_anatomical_image(self, image):
-        """
-        Stores the anatomical image and precomputes, for each
-        target voxel, which offsets to keep for the p-fraction.
-        """
-        self.anatomical_image = image
-        arr = image.as_array()
-        arr_p = np.pad(arr, self._pad, mode='reflect')
+        if self.parameters['normalize_features']:
+            arr = image.as_array()
+            std = arr.std()
+            norm = arr / std if std > 1e-12 else arr
+            tmp = image.clone()
+            tmp.fill(norm)
+            self.anatomical_image = tmp
+        else:
+            self.anatomical_image = image
+        self.mask = None
 
-        S0, S1, S2 = arr.shape
-        K = self._offsets.shape[0]
-        p = self.parameters['prop_features']
+    def precompute_mask(self):
+        n = self.parameters['num_neighbours']
+        K = n**3
+        k = self.parameters['mask_k'] or K
+        arr = self.anatomical_image.as_array()
+        pad = n//2
 
-        masks = np.empty((S0, S1, S2, K), dtype=np.bool_)
-        half = self.parameters['num_neighbours'] // 2
+        arr_p = np.pad(arr, pad, mode='reflect')
+        neigh = sliding_window_view(arr_p, (n,n,n))    # → (S0,S1,S2,n,n,n)
+        S0,S1,S2,_,_,_ = neigh.shape
+        flat = neigh.reshape(S0,S1,S2,K)               # → (S0,S1,S2,K)
 
-        # for each centre voxel, gather its n^3 neighbours,
-        # compute d², threshold to top-p fraction, store mask
-        for i in range(S0):
-            ci = i + half
-            for j in range(S1):
-                cj = j + half
-                for k in range(S2):
-                    ck = k + half
-                    centre = arr_p[ci, cj, ck]
+        center = arr[...,None]                          # → (S0,S1,S2,1)
+        diff   = np.abs(flat - center)                  # → (S0,S1,S2,K)
 
-                    # vectorized gather of the K neighbours
-                    di, dj, dk = self._offsets.T
-                    neigh = arr_p[ci + di, cj + dj, ck + dk]   # shape (K,)
-
-                    d2 = (neigh - centre)**2
-                    if p < 1.0:
-                        keep_n = max(int(math.ceil(p * K)), 1)
-                        cutoff = np.partition(d2, keep_n-1)[keep_n-1]
-                        masks[i, j, k] = (d2 <= cutoff)
-                    else:
-                        masks[i, j, k] = True
-
-        self._feature_masks = masks
-
+        thresh = np.partition(diff, k-1, axis=-1)[...,k-1:k]  # (S0,S1,S2,1)
+        mask   = diff <= thresh                         # boolean mask
+        return mask
 
     def apply(self, x):
+        p = self.parameters
         return self.neighbourhood_kernel(
             x,
             self.anatomical_image,
-            self.parameters['num_neighbours'],
-            self.parameters['sigma_anat'],
-            self.parameters['sigma_dist'],
-            self.parameters['prop_features']
+            p['num_neighbours'],
+            p['sigma_anat'],
+            p['sigma_dist'],
+            p['normalize_kernel'],
+            p['use_mask'],
+            p['recalc_mask']
         )
 
     def direct(self, x, out=None):
@@ -130,170 +128,242 @@ class BaseKernelOperator(LinearOperator):
         return out
 
     def adjoint(self, x, out=None):
-        return self.direct(x, out)
-
-    def neighbourhood_kernel(self, x, image,
-                             n, sigma_anat, sigma_dist,
-                             prop_features):
-        """To be implemented by subclasses."""
-        raise NotImplementedError
-
+        # default adjoint = direct (for python backend)
+        res = self.direct(x)
+        if out is None:
+            return res
+        out.fill(res.as_array())
+        return out
 
 
 class KernelOperator(BaseKernelOperator):
-    def neighbourhood_kernel(self, x, image,
-                             n, sigma_anat, sigma_dist,
-                             prop_features):
-        arr = image.as_array()
+    def neighbourhood_kernel(self,
+                             x, image,
+                             num_neighbours,
+                             sigma_anat,
+                             sigma_dist,
+                             normalize_kernel,
+                             use_mask,
+                             recalc_mask):
+        arr   = image.as_array()
         x_arr = x.as_array()
-        arr_p = np.pad(arr,   self._pad, mode='reflect')
-        x_p   = np.pad(x_arr, self._pad, mode='reflect')
+        n     = num_neighbours
+        pad   = n // 2
+        K     = n**3
 
-        S0, S1, S2 = arr.shape
-        res = np.empty_like(arr, dtype=np.float64)
-        half = n // 2
-        di, dj, dk = self._offsets.T  # each shape (K,)
+        if use_mask:
+            if self.mask is None or recalc_mask:
+                self.mask = self.precompute_mask()
+            mask = self.mask  # shape (S0,S1,S2,K)
 
-        for i in range(S0):
-            ci = i + half
-            for j in range(S1):
-                cj = j + half
-                for k in range(S2):
-                    ck = k + half
-                    centre = arr_p[ci, cj, ck]
+        # forward: reflect-pad and sliding windows
+        arr_p   = np.pad(arr, pad, mode='reflect')
+        x_p     = np.pad(x_arr, pad, mode='reflect')
+        neigh   = sliding_window_view(arr_p, (n,n,n))    # (S0,S1,S2,n,n,n)
+        x_neigh = sliding_window_view(x_p, (n,n,n))
 
-                    neigh = arr_p[ci+di, cj+dj, ck+dk]
-                    x_vals = x_p[ci+di, cj+dj, ck+dk]
+        S0,S1,S2,_,_,_ = neigh.shape
 
-                    mask = self._feature_masks[i, j, k]
-                    d2 = (neigh - centre)**2
+        # spatial weights
+        coords = np.arange(-pad, pad+1)
+        D2     = coords[:,None,None]**2 + coords[None,:,None]**2 + coords[None,None,:]**2
+        W_dist = np.exp(-D2/(2*sigma_dist**2))
 
-                    w_int = np.exp(-d2[mask] / (2 * sigma_anat * sigma_anat))
-                    w = w_int * self._spatial_flat[mask]
-                    if self.parameters['normalize_kernel']:
-                        S = w.sum()
-                        if S > 1e-12:
-                            w /= S
+        center = arr[...,None,None,None]
+        W_int  = np.exp(-((neigh - center)**2)/(2*sigma_anat**2))
+        W      = W_int * W_dist                         # (S0,S1,S2,n,n,n)
 
-                    res[i, j, k] = np.dot(x_vals[mask], w)
+        if use_mask:
+            W_flat = W.reshape(S0,S1,S2,K)
+            W_flat *= mask
+            W      = W_flat.reshape(S0,S1,S2,n,n,n)
 
+        if normalize_kernel:
+            denom = W.sum(axis=(3,4,5), keepdims=True)
+            W     = W / (denom + 1e-12)
+
+        res = (W * x_neigh).sum(axis=(3,4,5))
         out = image.clone()
         out.fill(res)
         return out
 
 
 if NUMBA_AVAIL:
-    @numba.njit(parallel=True, fastmath=True, nogil=True)
-    def _nb_kernel_mask(
-        x_arr, anat_p, x_p,
-        offsets, spatial_flat, masks,
-        n, sigma_anat, normalize
-    ):
-        S0, S1, S2, K = masks.shape
-        out = np.empty((S0, S1, S2), dtype=np.float64)
-        half = n // 2
-        sig2 = 2.0 * sigma_anat * sigma_anat
+    # --- Numba forward kernels ---
+    @numba.njit(cache=True, parallel=True)
+    def _nb_kernel(x_arr, anat_arr, n, sigma, sigma_dist, normalize):
+        s0,s1,s2 = anat_arr.shape
+        half     = n // 2
+        sig2     = 2.0 * sigma * sigma
+        dist2    = 2.0 * sigma_dist * sigma_dist
+        out      = np.empty_like(anat_arr, dtype=np.float64)
 
-        for idx in numba.prange(S0 * S1 * S2):
-            i = idx // (S1 * S2)
-            rem = idx %  (S1 * S2)
-            j = rem // S2
-            k = rem %  S2
+        for i in numba.prange(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    cv = anat_arr[i,j,k]
+                    sumv = 0.0
+                    wsum = 0.0
+                    # reflect + full n^3 loop
+                    for di in range(-half, half+1):
+                        ii = i+di
+                        if ii<0:    ii = -ii-1
+                        elif ii>=s0:ii = 2*s0-ii-1
+                        for dj in range(-half, half+1):
+                            jj = j+dj
+                            if jj<0:    jj = -jj-1
+                            elif jj>=s1:jj = 2*s1-jj-1
+                            for dk in range(-half, half+1):
+                                kk = k+dk
+                                if kk<0:    kk = -kk-1
+                                elif kk>=s2:kk = 2*s2-kk-1
 
-            ci = i + half
-            cj = j + half
-            ck = k + half
+                                diff = anat_arr[ii,jj,kk] - cv
+                                wi   = np.exp(-(diff*diff)/sig2)
+                                d2   = di*di + dj*dj + dk*dk
+                                wd   = np.exp(-d2/dist2)
+                                w    = wi * wd
 
-            centre = anat_p[ci, cj, ck]
-            sumv = 0.0
-            wsum = 0.0
+                                sumv += x_arr[ii,jj,kk] * w
+                                wsum += w
 
-            for m in range(K):
-                if not masks[i, j, k, m]:
-                    continue
-                di, dj, dk = offsets[m]
-                xi = x_p[ci+di, cj+dj, ck+dk]
-                ai = anat_p[ci+di, cj+dj, ck+dk]
-                d2 = (ai - centre)**2
-                wi = math.exp(-d2 / sig2)
-                w  = wi * spatial_flat[m]
-                sumv += xi * w
-                wsum += w
-
-            if normalize and wsum > 1e-12:
-                sumv /= wsum
-
-            out[i, j, k] = sumv
-
+                    if normalize and wsum>1e-12:
+                        sumv /= wsum
+                    out[i,j,k] = sumv
         return out
 
+    @numba.njit(cache=True, parallel=True)
+    def _nb_kernel_mask(x_arr, anat_arr, mask, n, sigma, sigma_dist, normalize):
+        s0,s1,s2 = anat_arr.shape
+        half     = n // 2
+        sig2     = 2.0 * sigma * sigma
+        dist2    = 2.0 * sigma_dist * sigma_dist
+        out      = np.empty_like(anat_arr, dtype=np.float64)
+
+        for i in numba.prange(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    cv   = anat_arr[i,j,k]
+                    sumv = 0.0
+                    wsum = 0.0
+                    idx  = 0
+                    for di in range(-half, half+1):
+                        for dj in range(-half, half+1):
+                            for dk in range(-half, half+1):
+                                if mask[i,j,k,idx] != 0:
+                                    ii = i+di
+                                    if ii<0:    ii = -ii-1
+                                    elif ii>=s0: ii = 2*s0-ii-1
+                                    jj = j+dj
+                                    if jj<0:    jj = -jj-1
+                                    elif jj>=s1:jj = 2*s1-jj-1
+                                    kk = k+dk
+                                    if kk<0:    kk = -kk-1
+                                    elif kk>=s2:kk = 2*s2-kk-1
+
+                                    diff = anat_arr[ii,jj,kk] - cv
+                                    wi   = np.exp(-(diff*diff)/sig2)
+                                    d2   = di*di + dj*dj + dk*dk
+                                    wd   = np.exp(-d2/dist2)
+                                    w    = wi * wd
+
+                                    sumv += x_arr[ii,jj,kk] * w
+                                    wsum += w
+                                idx += 1
+
+                    if normalize and wsum>1e-12:
+                        sumv /= wsum
+                    out[i,j,k] = sumv
+        return out
+
+    # --- Numba adjoint kernel ---
+    @numba.njit(cache=True, parallel=True)
+    def _nb_adjoint(x_arr, anat_arr, mask, use_mask,
+                    n, sigma_anat, sigma_dist):
+        s0,s1,s2 = anat_arr.shape
+        half     = n // 2
+        sig2     = 2.0 * sigma_anat * sigma_anat
+        dist2    = 2.0 * sigma_dist * sigma_dist
+        out      = np.zeros_like(anat_arr, dtype=np.float64)
+
+        for i in numba.prange(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    cv  = anat_arr[i,j,k]
+                    val = x_arr[i,j,k]
+                    idx = 0
+                    for di in range(-half, half+1):
+                        ii = i+di
+                        if ii<0:    ii = -ii-1
+                        elif ii>=s0:ii = 2*s0-ii-1
+                        for dj in range(-half, half+1):
+                            jj = j+dj
+                            if jj<0:    jj = -jj-1
+                            elif jj>=s1:jj = 2*s1-jj-1
+                            for dk in range(-half, half+1):
+                                kk = k+dk
+                                if kk<0:    kk = -kk-1
+                                elif kk>=s2:kk = 2*s2-kk-1
+
+                                if (not use_mask) or (mask[i,j,k,idx] != 0):
+                                    diff = anat_arr[ii,jj,kk] - cv
+                                    wi   = np.exp(-(diff*diff)/sig2)
+                                    d2   = di*di + dj*dj + dk*dk
+                                    wd   = np.exp(-d2/dist2)
+                                    w    = wi * wd
+                                    out[ii,jj,kk] += val * w
+                                idx += 1
+
+        return out
 
     class NumbaKernelOperator(BaseKernelOperator):
         def __init__(self, domain_geometry, **kwargs):
             super().__init__(domain_geometry, **kwargs)
             self.backend = 'numba'
 
-        def neighbourhood_kernel(self, x, image,
-                                 n, sigma_anat, sigma_dist,
-                                 prop_features):
-            arr = image.as_array()
-            arr_p = np.pad(arr,   self._pad, mode='reflect')
+        def neighbourhood_kernel(self,
+                                 x, image,
+                                 num_neighbours,
+                                 sigma_anat,
+                                 sigma_dist,
+                                 normalize_kernel,
+                                 use_mask,
+                                 recalc_mask):
+            arr   = image.as_array()
             x_arr = x.as_array()
-            x_p   = np.pad(x_arr, self._pad, mode='reflect')
+            n     = num_neighbours
 
-            res = _nb_kernel_mask(
-                x_arr, arr_p, x_p,
-                self._offsets, self._spatial_flat,
-                self._feature_masks,
-                n, sigma_anat,
-                self.parameters['normalize_kernel']
-            )
-            out = image.clone()
-            out.fill(res)
-            return out
+            if use_mask:
+                if self.mask is None or recalc_mask:
+                    self.mask = self.precompute_mask()
+                mask_int = self.mask.astype(np.int8)
+                res = _nb_kernel_mask(x_arr, arr, mask_int,
+                                      n, sigma_anat, sigma_dist,
+                                      normalize_kernel)
+            else:
+                res = _nb_kernel(x_arr, arr,
+                                 n, sigma_anat, sigma_dist,
+                                 normalize_kernel)
 
-# --- PyTorch accelerated implementation ---
-class TorchKernelOperator(BaseKernelOperator):
-    def neighbourhood_kernel(
-        self, x, image,
-        n, sigma_anat, sigma_dist,
-        prop_features
-    ):
-        # move data to GPU
-        x_t = torch.from_numpy(x.as_array()).to('cuda', non_blocking=True)
-        a_t = torch.from_numpy(image.as_array()).to('cuda', non_blocking=True)
-        p = n // 2
-        pad = (p, p, p, p, p, p)
-        x_p = F.pad(x_t.unsqueeze(0).unsqueeze(0), pad, mode='reflect')
-        a_p = F.pad(a_t.unsqueeze(0).unsqueeze(0), pad, mode='reflect')
+            out = image.clone(); out.fill(res); return out
 
-        X = x_p.unfold(2, n, 1).unfold(3, n, 1).unfold(4, n, 1)
-        A = a_p.unfold(2, n, 1).unfold(3, n, 1).unfold(4, n, 1)
-        B, C, D, H, W, _, _, _ = X.shape
-        K = n**3
-        X = X.reshape(B, C, D, H, W, K)
-        A = A.reshape(B, C, D, H, W, K)
+        def adjoint(self, x, out=None):
+            arr   = self.anatomical_image.as_array()
+            x_arr = x.as_array()
+            p     = self.parameters
+            if p['use_mask']:
+                if self.mask is None or p['recalc_mask']:
+                    self.mask = self.precompute_mask()
+                mask_int = self.mask.astype(np.int8)
+            else:
+                mask_int = np.zeros((1,), dtype=np.int8)
 
-        cv = a_t.unsqueeze(-1)
-        wi = torch.exp(-((A - cv)**2) / (2 * sigma_anat * sigma_anat))
-        # <<< use _spatial_flat, not _spatial_full >>>
-        ws = torch.from_numpy(
-            self._spatial_flat.reshape(1, 1, 1, 1, 1, K)
-        ).to(x_t.device, non_blocking=True)
-        w = wi * ws
-
-        if prop_features < 1.0:
-            diff2 = ((A - cv)**2).reshape(-1)
-            k = max(int(math.ceil(prop_features * diff2.numel())), 1)
-            cutoff = torch.kthvalue(diff2, k, dim=0).values
-            mask = ((A - cv)**2) <= cutoff
-            w = w * mask
-
-        if self.parameters['normalize_kernel']:
-            w = w / (w.sum(dim=-1, keepdim=True) + 1e-12)
-
-        out = (w * X).sum(dim=-1).squeeze()
-        res = image.clone()
-        res.fill(out.cpu().numpy())
-        return res
-
+            res = _nb_adjoint(x_arr, arr, mask_int,
+                              p['use_mask'],
+                              p['num_neighbours'],
+                              p['sigma_anat'],
+                              p['sigma_dist'])
+            img = x.clone(); img.fill(res)
+            if out is None:
+                return img
+            out.fill(res); return out
