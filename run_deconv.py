@@ -23,6 +23,10 @@ GUIDANCE_PATH = "/home/sam/working/others/Kjell/KRL/data/MK-H001/MK-H001_T1_MNI.
 BACKEND='numba' # backend for kernel operator. Won't fit on GPU so either 'numba' or 'python'
 SHOW_PLOTS = False
 FLIP_GUIDANCE = True # flip the guidance image along axis 1
+DO_RL = False # do RL deconvolution
+DO_KRL = True # do kernel guided RL deconvolution
+DO_DRL = False # do directional RL deconvolution
+
 
 # Kernel Global Parameters
 KERNEL_NUM_NEIGHBOURS = 5
@@ -32,7 +36,7 @@ KERNEL_TYPE = 'neighbourhood'
 KERNEL_NORMALIZE_FEATURES = True
 KERNEL_NORMALIZE_KERNEL = True
 USE_MASK = True
-MASK_K = 15
+MASK_K = 75
 RECALC_MASK = False
 
 # Display global parameters for reference.
@@ -230,131 +234,137 @@ def richardson_lucy(observed, blur_op, iterations, epsilon=1e-10,
     return current_estimate, objective_values
 
 # %%
-# Run standard Richardson–Lucy deconvolution (without kernel guidance).
-deconv_rl, obj_values_rl = richardson_lucy(
-    images['OSEM'], blurring_operator,
-    iterations=RL_ITERATIONS_STANDARD,
-    ground_truth=None
-)
+if DO_RL:
+    # Run standard Richardson–Lucy deconvolution (without kernel guidance).
+    deconv_rl, obj_values_rl = richardson_lucy(
+        images['OSEM'], blurring_operator,
+        iterations=RL_ITERATIONS_STANDARD,
+        ground_truth=None
+    )
 
 # %%
-# Display comparison for standard RL deconvolution.
-fig3 = show2D([deconv_rl, images['OSEM']],
-              title=['Deconvolved (RL)', 'OSEM'],
-              origin='upper', num_cols=2,
-              fix_range=[(0, 320), (0, 320)])
-fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_difference.png'))
+if DO_RL:
+    # Display comparison for standard RL deconvolution.
+    fig3 = show2D([deconv_rl, images['OSEM']],
+                title=['Deconvolved (RL)', 'OSEM'],
+                origin='upper', num_cols=2,
+                fix_range=[(0, 320), (0, 320)])
+    fig3.save(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_difference.png'))
 
-# Plot objective function for standard RL.
-plt.figure()
-plt.plot(obj_values_rl)
-plt.xlabel('Iteration')
-plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_objective.png'))
+    # Plot objective function for standard RL.
+    plt.figure()
+    plt.plot(obj_values_rl)
+    plt.xlabel('Iteration')
+    plt.ylabel('Objective Function Value')
+    plt.savefig(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter_objective.png'))
 
-# save the output
-deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.hv'))
-deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.nii'))
-
-# %%
-# Define kernel parameters using the global kernel constants.
-kernel_params = {
-    'num_neighbours': KERNEL_NUM_NEIGHBOURS,
-    'sigma_anat': KERNEL_SIGMA_ANAT,
-    'sigma_dist': KERNEL_SIGMA_DIST,
-    'kernel_type': KERNEL_TYPE,
-    'normalize_features': KERNEL_NORMALIZE_FEATURES,
-    'normalize_kernel': KERNEL_NORMALIZE_KERNEL,
-    'use_mask': USE_MASK,
-    'mask_k': MASK_K,
-    'recalc_mask': RECALC_MASK,
-}
-
-kernel_op = get_kernel_operator(
-    images['OSEM'],
-    backend=BACKEND,
-)
-kernel_op.parameters = kernel_params
-kernel_op.set_anatomical_image(images['T1'])
+    # save the output
+    deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.hv'))
+    deconv_rl.write(os.path.join(data_dir, f'deconv_rl_{RL_ITERATIONS_STANDARD}_iter.nii'))
 
 # %%
-# Run kernel-guided Richardson–Lucy deconvolution using global iteration value.
-deconv_kernel_alpha, obj_values_kernel = richardson_lucy(
-    images['OSEM'],
-    blurring_operator,
-    iterations=RL_ITERATIONS_KERNEL,
-    ground_truth=None,
-    kernel_operator=kernel_op
-)
+if DO_KRL:
+    # Define kernel parameters using the global kernel constants.
+    kernel_params = {
+        'num_neighbours': KERNEL_NUM_NEIGHBOURS,
+        'sigma_anat': KERNEL_SIGMA_ANAT,
+        'sigma_dist': KERNEL_SIGMA_DIST,
+        'kernel_type': KERNEL_TYPE,
+        'normalize_features': KERNEL_NORMALIZE_FEATURES,
+        'normalize_kernel': KERNEL_NORMALIZE_KERNEL,
+        'use_mask': USE_MASK,
+        'mask_k': MASK_K,
+        'recalc_mask': RECALC_MASK,
+    }
 
-# Map the estimated coefficients back using the kernel operator.
-deconv_kernel = kernel_op.direct(deconv_kernel_alpha)
-
-# %%
-# Display comparison: deconvolved image, OSEM, ground truth, and difference image.
-fig2 = show2D([deconv_kernel, images['OSEM']],
-              title=['Deconvolved', 'OSEM'],
-              origin='upper', num_cols=2,
-              fix_range=[(0, 320), (0, 320)])
-fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}_difference.png'))
-
-# %%
-# Plot objective function values for kernel-guided deconvolution.
-plt.figure()
-plt.plot(obj_values_kernel)
-plt.xlabel('Iteration')
-plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}_objective.png'))
-
-# save the output
-deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.hv'))
-deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.nii'))
-
-# plot the mask on the central voxel
-voxel = [images['OSEM'].shape[0] // 2, 
-         images['OSEM'].shape[1] // 2,
-         images['OSEM'].shape[2] // 2]
-mask = kernel_op.mask
-plt.figure()
-plt.plot(mask[voxel[0], voxel[1], voxel[2]], 'o')
-plt.savefig(os.path.join(data_dir, f'mask_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.png'))
-
+    kernel_op = get_kernel_operator(
+        images['OSEM'],
+        backend=BACKEND,
+    )
+    kernel_op.parameters = kernel_params
+    kernel_op.set_anatomical_image(images['T1'])
 
 # %%
-# Set up directional TV deconvolution.
-# Data fidelity term.
-f = fn.KullbackLeibler(b=images['OSEM'], eta=images['OSEM'].get_uniform_copy(1e-6))
-df = fn.OperatorCompositionFunction(f, blurring_operator)
+if DO_KRL:
+    # Run kernel-guided Richardson–Lucy deconvolution using global iteration value.
+    deconv_kernel_alpha, obj_values_kernel = richardson_lucy(
+        images['OSEM'],
+        blurring_operator,
+        iterations=RL_ITERATIONS_KERNEL,
+        ground_truth=None,
+        kernel_operator=kernel_op
+    )
 
-# Prior term: using ALPHA from the global parameters.
-grad = GradientOperator(images['OSEM'])
-grad_ref = grad.direct(images['T1'])
-d_op = op.CompositionOperator(DirectionalOperator(grad_ref), grad)
-prior = ALPHA * fn.OperatorCompositionFunction(fn.SmoothMixedL21Norm(epsilon=1e-4), d_op)
-
-maprl = MAPRL(initial_estimate=images['OSEM'], data_fidelity=df, prior=prior,
-              step_size=STEP_SIZE, relaxation_eta=RELAXATION_ETA,
-              update_objective_interval=UPDATE_OBJ_INTERVAL)
-maprl.run(verbose=1, iterations=DTV_ITERATIONS)
-deconv_dtv = maprl.solution
+    # Map the estimated coefficients back using the kernel operator.
+    deconv_kernel = kernel_op.direct(deconv_kernel_alpha)
 
 # %%
-# Display deconvolved image and difference image (DTV).
-fig4 = show2D([deconv_dtv, images['OSEM']],
-              title=['Deconvolved (DTV)', 'OSEM'],
-              origin='upper', num_cols=4,
-              fix_range=[(0, 320), (0, 320)])
-fig4.save(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_difference.png'))
+if DO_KRL:
+    # Display comparison: deconvolved image, OSEM, ground truth, and difference image.
+    fig2 = show2D([deconv_kernel, images['OSEM']],
+                title=['Deconvolved', 'OSEM'],
+                origin='upper', num_cols=2,
+                fix_range=[(0, 320), (0, 320)])
+    fig2.save(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_iter_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}_difference.png'))
 
-plt.figure(figsize=(15, 5))
-plt.plot(maprl.objective)
-plt.xlabel('Iteration')
-plt.ylabel('Objective Function Value')
-plt.savefig(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_objective.png'))
+    # Plot objective function values for kernel-guided deconvolution.
+    plt.figure()
+    plt.plot(obj_values_kernel)
+    plt.xlabel('Iteration')
+    plt.ylabel('Objective Function Value')
+    plt.savefig(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}_objective.png'))
 
-# save the output
-deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.hv'))
-deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.nii'))
+    # save the output
+    deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.hv'))
+    deconv_kernel.write(os.path.join(data_dir, f'deconv_kernel_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.nii'))
+
+    # plot the mask on the central voxel
+    voxel = [images['OSEM'].shape[0] // 2, 
+            images['OSEM'].shape[1] // 2,
+            images['OSEM'].shape[2] // 2]
+    mask = kernel_op.mask
+    plt.figure()
+    plt.plot(mask[voxel[0], voxel[1], voxel[2]], 'o')
+    plt.savefig(os.path.join(data_dir, f'mask_{RL_ITERATIONS_KERNEL}_{KERNEL_SIGMA_ANAT}_sigma_{KERNEL_SIGMA_DIST}_kNN_{MASK_K}.png'))
+
+
+# %%
+if DO_DRL:
+    # Set up directional TV deconvolution.
+    # Data fidelity term.
+    f = fn.KullbackLeibler(b=images['OSEM'], eta=images['OSEM'].get_uniform_copy(1e-6))
+    df = fn.OperatorCompositionFunction(f, blurring_operator)
+
+    # Prior term: using ALPHA from the global parameters.
+    grad = GradientOperator(images['OSEM'])
+    grad_ref = grad.direct(images['T1'])
+    d_op = op.CompositionOperator(DirectionalOperator(grad_ref), grad)
+    prior = ALPHA * fn.OperatorCompositionFunction(fn.SmoothMixedL21Norm(epsilon=1e-4), d_op)
+
+    maprl = MAPRL(initial_estimate=images['OSEM'], data_fidelity=df, prior=prior,
+                step_size=STEP_SIZE, relaxation_eta=RELAXATION_ETA,
+                update_objective_interval=UPDATE_OBJ_INTERVAL)
+    maprl.run(verbose=1, iterations=DTV_ITERATIONS)
+    deconv_dtv = maprl.solution
+
+# %%
+if DO_DRL:
+    # Display deconvolved image and difference image (DTV).
+    fig4 = show2D([deconv_dtv, images['OSEM']],
+                title=['Deconvolved (DTV)', 'OSEM'],
+                origin='upper', num_cols=4,
+                fix_range=[(0, 320), (0, 320)])
+    fig4.save(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_difference.png'))
+
+    plt.figure(figsize=(15, 5))
+    plt.plot(maprl.objective)
+    plt.xlabel('Iteration')
+    plt.ylabel('Objective Function Value')
+    plt.savefig(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha_objective.png'))
+
+    # save the output
+    deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.hv'))
+    deconv_dtv.write(os.path.join(data_dir, f'deconv_dtv_{DTV_ITERATIONS}_iter_{ALPHA}_alpha.nii'))
 
 # %%
 # Plot profiles through the central slices for comparison.
@@ -362,9 +372,12 @@ center_slice = deconv_kernel.shape[0] // 2
 profile_axis = deconv_kernel.shape[2] // 2
 
 plt.figure(figsize=(15, 5))
-plt.plot(deconv_kernel.as_array()[center_slice, :, profile_axis], label='Deconvolved (Kernel)')
-plt.plot(deconv_rl.as_array()[center_slice, :, profile_axis], label='Deconvolved (RL)')
-plt.plot(deconv_dtv.as_array()[center_slice, :, profile_axis], label='Deconvolved (DTV)')
+if DO_RL:
+    plt.plot(deconv_rl.as_array()[center_slice, :, profile_axis], label='Deconvolved (RL)')
+if DO_KRL:
+    plt.plot(deconv_kernel.as_array()[center_slice, :, profile_axis], label='Deconvolved (Kernel)')
+if DO_DRL:
+    plt.plot(deconv_dtv.as_array()[center_slice, :, profile_axis], label='Deconvolved (DTV)')
 plt.plot(images['OSEM'].as_array()[center_slice, :, profile_axis], label='OSEM')
 plt.legend()
 # long save path with all algorithm hyperparameters
