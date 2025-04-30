@@ -53,7 +53,7 @@ def test_kernel_operator(backend, image, reps=5):
     return fwd_arr, adj_arr, elapsed
 
 if __name__ == "__main__":
-    dims = (64,64,64)
+    dims = (96,21,108)
     base_image = create_fake_image(dims)
 
     backends = ['python', 'numba']
@@ -91,7 +91,28 @@ if __name__ == "__main__":
             val_py = py_fwd[idx_max]
             val_nb = nb_fwd[idx_max]
             delta = diff[idx_max]
-            print("\nMax difference between Python and Numba at voxel", idx_max)
+            print("\nMax difference between Python and Numba Forward at voxel", idx_max)
+            print(f"  python = {val_py:.6e}")
+            print(f"  numba  = {val_nb:.6e}")
+            print(f"  Δ      = {delta:.6e}")
+
+            # optionally list all mismatches above tolerance
+            tol = 1e-8
+            bad = np.where(np.abs(diff) > tol)
+            count = bad[0].size
+            print(f"\nVoxels differing by more than {tol:e}: {count}")
+            if count > 0:
+                coords = list(zip(bad[0], bad[1], bad[2]))[:10]
+                print("First few mismatches:", coords)
+
+            py_adj = results['python']['adj']
+            nb_adj = results['numba']['adj']
+            diff = nb_adj - py_adj
+            idx_max = np.unravel_index(np.argmax(np.abs(diff)), diff.shape)
+            val_py = py_adj[idx_max]
+            val_nb = nb_adj[idx_max]
+            delta = diff[idx_max]
+            print("\nMax difference between Python and Numba Adjoint at voxel", idx_max)
             print(f"  python = {val_py:.6e}")
             print(f"  numba  = {val_nb:.6e}")
             print(f"  Δ      = {delta:.6e}")

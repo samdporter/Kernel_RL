@@ -2,7 +2,13 @@ import numpy as np
 np.seterr(over='raise', invalid='raise')
 
 from cil.optimisation.operators import LinearOperator
-from numpy.lib.stride_tricks import sliding_window_view
+
+# try importing sliding_window_view from numpy
+try:
+    from numpy.lib.stride_tricks import sliding_window_view
+    SLIDING_WINDOW_AVAIL = True
+except ImportError:
+    SLIDING_WINDOW_AVAIL = False
 
 # Try importing numba
 try:
@@ -11,35 +17,26 @@ try:
 except ImportError:
     NUMBA_AVAIL = False
 
-# Try importing torch
-try:
-    import torch
-    import torch.nn.functional as F
-    TORCH_AVAIL = True
-except ImportError:
-    TORCH_AVAIL = False
-
 
 def get_kernel_operator(domain_geometry, backend='auto', **kwargs):
     """
     Returns the best available kernel operator.
     backend: 'auto'|'torch'|'numba'|'python'
-    auto order: torch → numba → python
+    auto order: numba → python
     """
     if backend == 'auto':
-        if TORCH_AVAIL:
-            backend = 'torch'
-        elif NUMBA_AVAIL:
+        if NUMBA_AVAIL:
             backend = 'numba'
         else:
             backend = 'python'
 
-    if backend == 'torch' and TORCH_AVAIL:
-        return TorchKernelOperator(domain_geometry, **kwargs)
     elif backend == 'numba' and NUMBA_AVAIL:
         return NumbaKernelOperator(domain_geometry, **kwargs)
-    else:
+    elif backend == 'python' and SLIDING_WINDOW_AVAIL:
         return KernelOperator(domain_geometry, **kwargs)
+    else:
+        raise ValueError(f"Backend '{backend}' not available. "
+                         "Please install numba or numpy with sliding_window_view.")
 
 
 class BaseKernelOperator(LinearOperator):
@@ -65,16 +62,6 @@ class BaseKernelOperator(LinearOperator):
         self.parameters.update(parameters)
         # clear mask so it will be rebuilt
         self.mask = None
-        # rebuild torch spatial weights if needed
-        if self.backend == 'torch':
-            n  = self.parameters['num_neighbours']
-            sd = self.parameters['sigma_dist']
-            coords = torch.stack(torch.meshgrid(
-                torch.arange(n), torch.arange(n), torch.arange(n),
-                indexing='ij'), dim=-1).float()
-            c = (n-1)/2
-            D2 = ((coords-c)**2).sum(dim=-1)
-            self._spatial = torch.exp(-D2/(2*sd*sd)).reshape(-1).cuda()
 
     def set_anatomical_image(self, image):
         if self.parameters['normalize_features']:
@@ -198,6 +185,14 @@ if NUMBA_AVAIL:
         dist2    = 2.0 * sigma_dist * sigma_dist
         out      = np.empty_like(anat_arr, dtype=np.float64)
 
+        # pre calculate the distance weights
+        wd = np.empty((n,n,n), dtype=np.float64)
+        for di in range(-half, half+1):
+            for dj in range(-half, half+1):
+                for dk in range(-half, half+1):
+                    d2 = di*di + dj*dj + dk*dk
+                    wd[di+half,dj+half,dk+half] = np.exp(-d2/dist2)
+
         for i in numba.prange(s0):
             for j in range(s1):
                 for k in range(s2):
@@ -220,9 +215,7 @@ if NUMBA_AVAIL:
 
                                 diff = anat_arr[ii,jj,kk] - cv
                                 wi   = np.exp(-(diff*diff)/sig2)
-                                d2   = di*di + dj*dj + dk*dk
-                                wd   = np.exp(-d2/dist2)
-                                w    = wi * wd
+                                w    = wi * wd[di+half,dj+half,dk+half]
 
                                 sumv += x_arr[ii,jj,kk] * w
                                 wsum += w
@@ -239,6 +232,14 @@ if NUMBA_AVAIL:
         sig2     = 2.0 * sigma * sigma
         dist2    = 2.0 * sigma_dist * sigma_dist
         out      = np.empty_like(anat_arr, dtype=np.float64)
+
+        # pre calculate the distance weights
+        wd = np.empty((n,n,n), dtype=np.float64)
+        for di in range(-half, half+1):
+            for dj in range(-half, half+1):
+                for dk in range(-half, half+1):
+                    d2 = di*di + dj*dj + dk*dk
+                    wd[di+half,dj+half,dk+half] = np.exp(-d2/dist2)
 
         for i in numba.prange(s0):
             for j in range(s1):
@@ -263,9 +264,7 @@ if NUMBA_AVAIL:
 
                                     diff = anat_arr[ii,jj,kk] - cv
                                     wi   = np.exp(-(diff*diff)/sig2)
-                                    d2   = di*di + dj*dj + dk*dk
-                                    wd   = np.exp(-d2/dist2)
-                                    w    = wi * wd
+                                    w    = wi * wd[di+half,dj+half,dk+half]
 
                                     sumv += x_arr[ii,jj,kk] * w
                                     wsum += w
@@ -285,6 +284,14 @@ if NUMBA_AVAIL:
         sig2     = 2.0 * sigma_anat * sigma_anat
         dist2    = 2.0 * sigma_dist * sigma_dist
         out      = np.zeros_like(anat_arr, dtype=np.float64)
+
+        # pre calculate the distance weights
+        wd = np.empty((n,n,n), dtype=np.float64)
+        for di in range(-half, half+1):
+            for dj in range(-half, half+1):
+                for dk in range(-half, half+1):
+                    d2 = di*di + dj*dj + dk*dk
+                    wd[di+half,dj+half,dk+half] = np.exp(-d2/dist2)
 
         for i in numba.prange(s0):
             for j in range(s1):
@@ -308,9 +315,7 @@ if NUMBA_AVAIL:
                                 if (not use_mask) or (mask[i,j,k,idx] != 0):
                                     diff = anat_arr[ii,jj,kk] - cv
                                     wi   = np.exp(-(diff*diff)/sig2)
-                                    d2   = di*di + dj*dj + dk*dk
-                                    wd   = np.exp(-d2/dist2)
-                                    w    = wi * wd
+                                    w    = wi * wd[di+half,dj+half,dk+half]
                                     out[ii,jj,kk] += val * w
                                 idx += 1
 
@@ -355,14 +360,21 @@ if NUMBA_AVAIL:
                 if self.mask is None or p['recalc_mask']:
                     self.mask = self.precompute_mask()
                 mask_int = self.mask.astype(np.int8)
-            else:
-                mask_int = np.zeros((1,), dtype=np.int8)
 
-            res = _nb_adjoint(x_arr, arr, mask_int,
-                              p['use_mask'],
-                              p['num_neighbours'],
-                              p['sigma_anat'],
-                              p['sigma_dist'])
+                res = _nb_adjoint(x_arr, arr, mask_int,
+                                p['use_mask'],
+                                p['num_neighbours'],
+                                p['sigma_anat'],
+                                p['sigma_dist'])
+                
+            else:
+                # self adjoint
+                res = _nb_kernel(x_arr, arr,
+                                    p['num_neighbours'],
+                                    p['sigma_anat'],
+                                    p['sigma_dist'],
+                                    p['normalize_kernel'])
+                
             img = x.clone(); img.fill(res)
             if out is None:
                 return img
