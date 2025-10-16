@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  krl:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+
+    volumes:
+      - .:/workspace:cached
+      - krl-bashhistory:/commandhistory
+      - krl-conda:/opt/conda/pkgs
+
+    command: sleep infinity
+
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+
+    network_mode: host
+
+    # GPU support with NVIDIA Docker (gracefully falls back to CPU if GPU unavailable)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    user: vscode
+    working_dir: /workspace
+
+    stdin_open: true
+    tty: true
+
+volumes:
+  krl-bashhistory:
+  krl-conda:

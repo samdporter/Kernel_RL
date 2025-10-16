@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "krl"
+version = "0.1.0"
+description = "Kernelised Richardson-Lucy deconvolution for PET image reconstruction"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Kjell Erlandsson", email = "kjell.erlandsson@kcl.ac.uk"}
+]
+keywords = ["PET", "deconvolution", "Richardson-Lucy", "medical imaging", "image reconstruction"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "numpy>=1.20",
+    "matplotlib>=3.3",
+    "scipy>=1.7",
+    "nibabel>=3.0",
+]
+
+[project.optional-dependencies]
+accelerators = [
+    "numba>=0.55",
+    "torch>=1.9",
+    "cupy>=9.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+]
+all = [
+    "krl[accelerators,dev]",
+]
+
+[project.scripts]
+krl-deconv = "krl.cli.run_deconv:main"
+krl-compare = "krl.cli.run_comparison:main"
+krl-sweep = "krl.cli.run_sweeps:main"
+
+[project.urls]
+Homepage = "https://github.com/KCL-BMEIS/KRL"
+Repository = "https://github.com/KCL-BMEIS/KRL"
+Issues = "https://github.com/KCL-BMEIS/KRL/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["krl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

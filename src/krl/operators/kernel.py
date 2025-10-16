@@ -9,7 +9,7 @@ except (ImportError, OSError):  # pragma: no cover - optional dependency
         def __init__(self, *args, **kwargs) -> None:
             self.__dict__.update(kwargs)
 
-from .utils import get_array
+from krl.utils import get_array
 
 # try importing sliding_window_view from numpy
 try:

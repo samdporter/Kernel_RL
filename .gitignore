@@ -1,8 +1,48 @@
-data
+# Data directories
+data/
+results/
 tmp*.*s
 
-# ignore any __pycache__ folders in any subdirectory
+# Python cache
 __pycache__/
-# ignore any .pyc files in any subdirectory
+*/__pycache__/*
 *.pyc
-# ignore any .pyo files in any subdirectory
+*.pyo
+*.pyd
+.Python
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+*.log

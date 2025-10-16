@@ -1,0 +1,12 @@
+# Core dependencies
+numpy>=1.20
+matplotlib>=3.3
+scipy>=1.7
+nibabel>=3.0
+
+# Note: CIL must be installed separately with conda
+# See: https://github.com/TomographicImaging/CIL
+# conda install -c conda-forge -c ccpi cil
+
+# SIRF is optional for .hv file support
+# See: https://github.com/SyneRBI/SIRF/wiki/SIRF-SuperBuild-on-Ubuntu

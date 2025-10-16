@@ -1,13 +1,69 @@
-# Simple Repository demonstrating Kernelised Richardson Lucy Method
+# KRL: Kernelised Richardson-Lucy Deconvolution for PET
 
-Comparisons with simple RL and MAPRL with directional total variation
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## To run...
+Advanced PET image reconstruction using anatomically-guided Richardson-Lucy deconvolution.
 
-First run `python3 dependencies.py` to check whetehr the required packages are installed. This repository requires SIRF to be installed, which cannot be done thorugh pip and conda. 
+## Quick Start
 
-A lot of the code should be easily translatable to CIL `DataContainers` as SIRF projectors are only needed for the creation of simulated OSEM images.
+### Docker (Recommended)
 
-Then run `python3 setup_demo.py` to create OSEM images and a point spread functions (used to estimate PSF - not a particularly good method)
+```bash
+git clone https://github.com/KCL-BMEIS/KRL.git && cd KRL
+make build && make start && make shell
+python run_deconv.py --help
+```
 
-Finally run `python3 run_deconv.py` to compare the three methods. This will create plots of objective functions, RMSEs and compare output images. RMSE is currently not performed for the MAPRL because it would require a CIL `Callback` method that is currently not available on the CS clsuter @ UCL.
+### Conda
+
+```bash
+git clone https://github.com/KCL-BMEIS/KRL.git && cd KRL
+conda install -c conda-forge -c ccpi cil
+pip install -e .
+```
+
+### VS Code Dev Container
+
+Open in VS Code → Press `F1` → "Dev Containers: Reopen in Container"
+
+## Usage
+
+```bash
+python run_deconv.py \
+  --data-path data/spheres \
+  --emission-file OSEM.hv \
+  --guidance-file T1.hv \
+  --enable-krl
+```
+
+## Docker Commands
+
+```bash
+make build    # Build
+make start    # Start
+make shell    # Access
+make test     # Test
+make stop     # Stop
+```
+
+## Documentation
+
+- [Getting Started](docs/GETTING-STARTED.md) - Installation
+- [Methods](docs/METHODS.md) - RL, KRL, HKRL, DTV explained
+- [Docker Guide](docker/README.md) - Docker commands
+
+## License
+
+MIT License - see [LICENSE](LICENSE)
+
+## Citation
+
+```bibtex
+@software{krl2025,
+  author = {Erlandsson, Kjell},
+  title = {KRL: Kernelised Richardson-Lucy Deconvolution for PET},
+  year = {2025},
+  url = {https://github.com/KCL-BMEIS/KRL}
+}
+```
