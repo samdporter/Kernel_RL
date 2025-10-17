@@ -64,33 +64,40 @@ Results saved to `results/`
 
 ## GPU Acceleration
 
-The Docker container includes GPU support for significant performance improvements:
+The Docker container can use NVIDIA GPUs for significant performance improvements.
 
-**Automatic GPU detection:**
-- GPU acceleration is automatically used when available
-- Falls back to CPU if no GPU is detected
-- Supports: PyTorch (CUDA), CuPy, and Numba
+**Automatic detection and fallback:**
+- `make start` checks for the `nvidia` Docker runtime.
+- GPU acceleration is enabled automatically when the runtime is available.
+- If GPUs are unavailable or the runtime is missing, the container starts in CPU-only mode with no extra steps required.
 
-**Check GPU status:**
+**Check GPU status inside the container:**
 ```bash
 python src/gpu_utils.py
 ```
 
-**Requirements for GPU:**
-- NVIDIA GPU with CUDA support
-- NVIDIA Docker runtime installed: https://github.com/NVIDIA/nvidia-docker
-- Docker Compose V2 (for GPU deploy syntax)
+**Host requirements for GPU support:**
+- NVIDIA GPU with CUDA support.
+- Recent NVIDIA driver (verify on the host with `nvidia-smi`).
+- Docker Engine with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
-**Install NVIDIA Docker (if needed):**
+**Install NVIDIA Container Toolkit (Ubuntu 22.04 example):**
 ```bash
-# Ubuntu/Debian
-distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-  sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-sudo apt-get update && sudo apt-get install -y nvidia-docker2
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates gnupg
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo sed -i 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit.gpg] https://#' \
+  /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
+
+After installing, run `docker info | grep -i nvidia` to confirm that the `nvidia` runtime is listed before starting the container.
 
 ## Common Issues
 

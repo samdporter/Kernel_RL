@@ -31,7 +31,13 @@ build:
 
 # Start the container
 start:
-	docker-compose up -d
+	@if docker info --format '{{json .Runtimes}}' 2>/dev/null | grep -q '"nvidia"'; then \
+		echo "Detected NVIDIA runtime; starting container with GPU support."; \
+		docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d; \
+	else \
+		echo "No NVIDIA runtime detected; starting container in CPU-only mode."; \
+		docker-compose up -d; \
+	fi
 	@echo "Container started. Use 'make shell' to access it."
 
 # Stop the container

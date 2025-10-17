@@ -1,0 +1,10 @@
+services:
+  krl:
+    # GPU support with NVIDIA Docker Runtime
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
