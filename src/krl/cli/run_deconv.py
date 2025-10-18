@@ -33,8 +33,10 @@ from krl.cli.config import (
 from krl.operators.directional import DirectionalOperator
 from krl.operators.blurring import create_gaussian_blur
 from krl.algorithms.maprl import MAPRL
+from krl.algorithms.richardson_lucy import RichardsonLucy
 from krl.operators.kernel_operator import get_kernel_operator
 from krl.utils import load_image, save_image
+from krl.callbacks import NRMSECallback, SaveIterationCallback
 
 
 def fwhm_to_sigma(fwhm: Tuple[float, float, float]) -> Tuple[float, float, float]:
@@ -76,6 +78,16 @@ def load_images(config: PipelineConfig) -> Dict[str, ImageData]:
     if config.flip_emission:
         arr = images["OSEM"].as_array()
         images["OSEM"].fill(np.flip(arr, axis=1))
+
+    # Load ground truth if available
+    if config.ground_truth_path() is not None:
+        gt_path = config.ground_truth_path()
+        if gt_path.exists():
+            images["ground_truth"] = load_image(gt_path)
+            print(f"Loaded ground truth from {gt_path}")
+        else:
+            print(f"Warning: Ground truth file specified but not found: {gt_path}")
+
     return images
 
 
@@ -145,35 +157,79 @@ def richardson_lucy(
     save_dir: Path,
     save_interval: int = 10,
     tag: str = "",
+    callbacks=None,
 ):
-    geometry = observed.geometry
-    sensitivity = geometry.allocate(value=1)
-    effective_blur = blur_op
-    if kernel_operator is not None:
-        effective_blur = op.CompositionOperator(blur_op, kernel_operator)
-        sensitivity = effective_blur.adjoint(geometry.allocate(value=1))
+    """
+    Run Richardson-Lucy deconvolution using the RichardsonLucy algorithm class.
 
-    current = observed.clone()
-    est_blur = effective_blur.direct(current)
-    objective_values = []
+    This is a convenience wrapper around the RichardsonLucy class that maintains
+    backward compatibility with the old function-based interface.
 
-    for idx in range(iterations):
-        current *= effective_blur.adjoint(observed / (est_blur + epsilon))
-        current /= (sensitivity + epsilon)
-        with np.errstate(invalid="ignore"):
-            current.maximum(0, out=current)
-        est_blur = effective_blur.direct(current)
-        obj = (est_blur - observed * (est_blur + epsilon).log()).sum()
-        objective_values.append(obj)
+    Parameters
+    ----------
+    observed : ImageData
+        Observed blurred image
+    blur_op : LinearOperator
+        Blurring operator (PSF)
+    iterations : int
+        Number of RL iterations
+    freeze_iteration : int, optional
+        Freeze kernel operator at this iteration (for KRL/HKRL)
+    epsilon : float, optional
+        Small value to avoid division by zero
+    kernel_operator : LinearOperator, optional
+        Kernel operator for KRL/HKRL
+    save_dir : Path
+        Directory to save intermediate results
+    save_interval : int, optional
+        Save every N iterations
+    tag : str, optional
+        Prefix for saved filenames
+    callbacks : list, optional
+        List of callback functions
 
-        if (idx + 1) % save_interval == 0:
-            output = kernel_operator.direct(current) if kernel_operator else current
-            save_image(output, save_dir / f"{tag}deconv_iter_{idx+1}.nii.gz")
-        if freeze_iteration > 0 and (idx + 1) == freeze_iteration and kernel_operator is not None:
-            # Freeze the kernel operator (no further updates)
-            kernel_operator.freeze_emission_kernel = True
+    Returns
+    -------
+    current : ImageData
+        Latent image (for KRL) or reconstructed image (for standard RL)
+    objective_values : list
+        Objective function values per iteration
+    """
+    # Prepare callbacks list
+    all_callbacks = []
 
-    return current, objective_values
+    # Add save callback if needed
+    if save_interval > 0:
+        save_callback = SaveIterationCallback(
+            output_dir=save_dir,
+            interval=save_interval,
+            prefix=f"{tag}deconv_iter",
+            kernel_operator=kernel_operator,
+        )
+        all_callbacks.append(save_callback)
+
+    # Add user-provided callbacks
+    if callbacks is not None:
+        all_callbacks.extend(callbacks)
+
+    # Create and run the algorithm
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur_op,
+        observed_data=observed,
+        kernel_operator=kernel_operator,
+        freeze_iteration=freeze_iteration,
+        epsilon=epsilon,
+        update_objective_interval=1,
+    )
+
+    rl.run(
+        iterations=iterations,
+        verbose=0,
+        callbacks=all_callbacks if all_callbacks else None,
+    )
+
+    return rl.x, rl.loss
 
 
 def save_objective(values: Iterable[float], output: Path, title: str) -> None:
@@ -248,7 +304,21 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
 
     reconstructions: Dict[str, ImageData] = {}
 
+    # Prepare NRMSE callbacks if ground truth is available
+    ground_truth = images.get("ground_truth")
+
     if config.do_rl:
+        rl_callbacks = []
+        if ground_truth is not None:
+            rl_callbacks.append(
+                NRMSECallback(
+                    ground_truth=ground_truth,
+                    output_file=output_dir / "rl_nrmse.csv",
+                    interval=1,
+                    verbose=True,
+                )
+            )
+
         rl_img, rl_obj = richardson_lucy(
             images["OSEM"],
             blur,
@@ -256,6 +326,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             freeze_iteration=config.freeze_iteration,
             save_dir=output_dir,
             tag="rl_",
+            callbacks=rl_callbacks if rl_callbacks else None,
         )
         with np.errstate(invalid="ignore"):
             rl_img.maximum(0, out=rl_img)
@@ -278,6 +349,19 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             images["OSEM"],
             images["T1"],
         )
+
+        krl_callbacks = []
+        if ground_truth is not None:
+            krl_callbacks.append(
+                NRMSECallback(
+                    ground_truth=ground_truth,
+                    output_file=output_dir / "krl_nrmse.csv",
+                    interval=1,
+                    kernel_operator=kernel_operator,
+                    verbose=True,
+                )
+            )
+
         kalpha, kernel_obj = richardson_lucy(
             images["OSEM"],
             blur,
@@ -285,6 +369,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             kernel_operator=kernel_operator,
             save_dir=output_dir,
             tag="kernel_",
+            callbacks=krl_callbacks if krl_callbacks else None,
         )
         deconv_kernel = kernel_operator.direct(kalpha)
         with np.errstate(invalid="ignore"):
@@ -338,6 +423,17 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
                         output_dir / f"dtv_iter_{algorithm.iteration}.nii.gz"
                     )
 
+        dtv_callbacks = [SaveCallback(10)]
+        if ground_truth is not None:
+            dtv_callbacks.append(
+                NRMSECallback(
+                    ground_truth=ground_truth,
+                    output_file=output_dir / "dtv_nrmse.csv",
+                    interval=1,
+                    verbose=True,
+                )
+            )
+
         maprl = MAPRL(
             initial_estimate=images["OSEM"],
             data_fidelity=df,
@@ -349,7 +445,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
         maprl.run(
             verbose=1,
             iterations=config.dtv_iterations,
-            callbacks=[SaveCallback(10)],
+            callbacks=dtv_callbacks,
         )
         deconv_dtv = maprl.solution
         with np.errstate(invalid="ignore"):

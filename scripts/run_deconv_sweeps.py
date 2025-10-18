@@ -73,6 +73,7 @@ DATASETS: Dict[str, Dict[str, object]] = {
             data_path=Path("data/spheres"),
             emission_file="phant_pet.nii",
             guidance_file="phant_mri.nii",
+            ground_truth_file="phant_orig.nii",
             backend="auto",
             do_rl=False,
             do_krl=False,
@@ -134,6 +135,18 @@ DATASETS: Dict[str, Dict[str, object]] = {
 # Pipeline sweep definitions ---------------------------------------------------
 
 PIPELINES: Dict[str, Dict[str, object]] = {
+    "rl": {
+        "description": "Standard Richardson-Lucy",
+        "config_overrides": {
+            "do_rl": True,
+            "do_krl": False,
+            "do_drl": False,
+            "rl_iterations_standard": 100,
+        },
+        "kernel_overrides": {},
+        "config_grid": {},
+        "kernel_grid": {},
+    },
     "dtv": {
         "description": "Directional total variation MAP-RL",
         "config_overrides": {

@@ -56,6 +56,7 @@ class PipelineConfig:
     output_root: Path = Path("results")
     emission_file: str = "OSEM_b1337_n5.hv"
     guidance_file: str = "T1_b1337.hv"
+    ground_truth_file: Optional[str] = None
     backend: str = "numba"
     show_plots: bool = False
     flip_emission: bool = False
@@ -71,7 +72,7 @@ class PipelineConfig:
     freeze_iteration: int = 0
     dtv_iterations: int = 100
     alpha: float = 0.1
-    step_size: float = 1.0
+    step_size: float = 0.2
     relaxation_eta: float = 0.01
     update_obj_interval: int = 1
     psf_kernel_size: int = 5
@@ -82,6 +83,11 @@ class PipelineConfig:
 
     def guidance_path(self) -> Path:
         return self.data_path / self.guidance_file
+
+    def ground_truth_path(self) -> Optional[Path]:
+        if self.ground_truth_file is None:
+            return None
+        return self.data_path / self.ground_truth_file
 
     def output_directory(self, kernel: KernelParameters) -> Path:
         parts = [self.save_suffix]
@@ -149,6 +155,7 @@ def parse_common_args(
     parser.add_argument("--data-path", type=Path, default=defaults.data_path)
     parser.add_argument("--emission-file", default=defaults.emission_file)
     parser.add_argument("--guidance-file", default=defaults.guidance_file)
+    parser.add_argument("--ground-truth-file", default=defaults.ground_truth_file, help="Ground truth image for NRMSE calculation (optional)")
     parser.add_argument("--output-root", type=Path, default=defaults.output_root)
     parser.add_argument(
         "--backend", choices=["auto", "numba"], default=defaults.backend
@@ -209,6 +216,7 @@ def parse_common_args(
         data_path=args.data_path,
         emission_file=args.emission_file,
         guidance_file=args.guidance_file,
+        ground_truth_file=args.ground_truth_file,
         output_root=args.output_root,
         backend=args.backend,
         show_plots=args.show_plots,
