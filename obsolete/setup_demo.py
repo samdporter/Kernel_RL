@@ -114,6 +114,16 @@ for key, image in arr_dict.items():
     image_dict[key] = img_data
     img_data.write(os.path.join(DATA_DIR, f'{key}_b{BW_SEED}.hv'))
 
+
+def allocate_uniform(image, value):
+    """Allocate an image filled with a constant value."""
+    geometry = getattr(image, 'geometry', None)
+    if geometry is not None and hasattr(geometry, 'allocate'):
+        return geometry.allocate(value=value)
+    clone = image.clone()
+    clone.fill(value)
+    return clone
+
 # %%
 # Define functions to create a 3D Gaussian kernel (PSF).
 def fwhm_to_sigma(fwhm):
@@ -221,7 +231,7 @@ reconstructor.set_up(image_dict['PET'])
 cylinder_processor = pet.TruncateToCylinderProcessor()
 cylinder_processor.set_strictly_less_than_radius(True)
 
-current_estimate = image_dict['PET'].get_uniform_copy(1)
+current_estimate = allocate_uniform(image_dict['PET'], 1)
 cylinder_processor.apply(current_estimate)
 
 obj_values = []
@@ -239,7 +249,7 @@ current_estimate.write(os.path.join(DATA_DIR, f'OSEM_b{BW_SEED}_n{NOISE_SEED}.hv
 
 # %%
 # Simulate a point source measurement for PSF estimation.
-point_source = image_dict['PET'].get_uniform_copy(0)
+point_source = allocate_uniform(image_dict['PET'], 0)
 ps_array = point_source.as_array()
 # Set the central voxel to a high value.
 center = (ps_array.shape[0] // 2, ps_array.shape[1] // 2, ps_array.shape[2] // 2)
@@ -258,7 +268,7 @@ ps_reconstructor.set_num_subiterations(8)
 ps_reconstructor.set_objective_function(ps_objective)
 ps_reconstructor.set_up(image_dict['PET'])
 
-current_ps_estimate = image_dict['PET'].get_uniform_copy(1)
+current_ps_estimate = allocate_uniform(image_dict['PET'], 1)
 cylinder_processor.apply(current_ps_estimate)
 ps_obj_values = []
 

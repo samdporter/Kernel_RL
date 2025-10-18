@@ -6,6 +6,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+SRC_ROOT = PROJECT_ROOT / "src"
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
+
 
 def _ensure_module(name: str) -> types.ModuleType:
     module = sys.modules.get(name)
@@ -258,11 +262,3 @@ def _install_sirf_stub() -> None:
 
 _install_torch_stub()
 _install_sirf_stub()
-
-# Ensure optional backends fall back to python implementations during tests
-try:
-    import src.my_kem as _my_kem
-
-    _my_kem.NUMBA_AVAIL = False
-except Exception:
-    pass

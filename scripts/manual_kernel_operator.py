@@ -12,7 +12,7 @@ try:
 except ImportError as exc:  # pragma: no cover - optional dependency
     raise SystemExit("This script requires SIRF to be installed.") from exc
 
-from src.my_kem import get_kernel_operator
+from src.kernel_operator import get_kernel_operator
 
 np.seterr(over="raise", invalid="raise")
 
@@ -61,7 +61,7 @@ def main():
     dims = (96, 21, 108)
     base_image = create_fake_image(dims)
 
-    backends = ["python", "numba"]
+    backends = ["numba"]
     results = {}
     for b in backends:
         print(f"Testing '{b}' backend…")
@@ -71,16 +71,8 @@ def main():
         except Exception as exc:  # pragma: no cover - manual smoke test
             print(f"  '{b}' failed: {exc}")
 
-    python_result = results.get("python")
-    if python_result:
-        ref = python_result["fwd"]
-        for b, data in results.items():
-            if b == "python":
-                continue
-            ok_f = np.allclose(data["fwd"], ref, rtol=1e-6, atol=1e-8)
-            ok_a = np.allclose(data["adj"], ref, rtol=1e-6, atol=1e-8)
-            print(f"{b:6s} forward match: {ok_f}")
-            print(f"{b:6s} adjoint match: {ok_a}")
+    if not results:
+        return
 
     print("\n--- Timings (s) ---")
     for b, data in results.items():

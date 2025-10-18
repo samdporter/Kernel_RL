@@ -12,7 +12,7 @@ anatomical guidance for PET imaging, including:
 __version__ = "0.1.0"
 __author__ = "Kjell Erlandsson"
 
-from krl.operators.kernel import (
+from krl.operators.kernel_operator import (
     get_kernel_operator,
     KernelOperator,
     BaseKernelOperator,

@@ -21,7 +21,6 @@ import numpy as np
 from krl import (
     get_kernel_operator,
     create_gaussian_blur,
-    Gradient,
     DirectionalOperator,
     MAPRL,
     load_image,
@@ -33,6 +32,7 @@ from krl.utils import get_array
 try:
     import cil.optimisation.functions as fn
     import cil.optimisation.operators as op
+    from cil.optimisation.operators import GradientOperator
     from cil.optimisation.utilities.callbacks import Callback
     from cil.utilities.display import show2D
 except ImportError:
@@ -74,17 +74,20 @@ def richardson_lucy(observed, blur_op, iterations, *, epsilon=1e-10, kernel_oper
     print(f"Running Richardson-Lucy for {iterations} iterations...")
 
     # Compute sensitivity (normalization)
-    sensitivity = observed.get_uniform_copy(1)
-    effective_blur = blur_op
+    geometry = observed.geometry
+    sensitivity = geometry.allocate(value=1)
+    current = observed.clone()
 
     if kernel_operator is not None:
         # KRL/HKRL mode: compose blur and kernel operators
         effective_blur = op.CompositionOperator(blur_op, kernel_operator)
-        sensitivity = effective_blur.adjoint(observed.get_uniform_copy(1))
-
-    # Initialize
-    current = observed.clone()
-    est_blur = effective_blur.direct(current)
+        est_blur = effective_blur.direct(current)
+        sensitivity = effective_blur.adjoint(geometry.allocate(value=1))
+    else:
+        # Standard RL mode
+        effective_blur = blur_op
+        est_blur = effective_blur.direct(current)
+        
     objective_values = []
 
     # RL iterations
@@ -113,8 +116,8 @@ def main():
 
     # Data paths
     data_dir = Path("data/spheres")
-    emission_file = data_dir / "OSEM_b1337_n5.hv"  # Or .nii.gz
-    anatomy_file = data_dir / "T1_b1337.hv"        # Or .nii.gz
+    emission_file = data_dir / "phant_orig.nii"  # Or .nii.gz
+    anatomy_file = data_dir / "phant_mri.nii"        # Or .nii.gz
     output_dir = Path("results/spheres_example")
 
     # Create output directory
@@ -175,7 +178,7 @@ def main():
     # PSF blurring operator
     blur_op = create_gaussian_blur(
         fwhm_to_sigma(fwhm),
-        emission,
+        emission.geometry,
         backend="auto"  # Auto-select best available backend
     )
     print(f"   Blur operator backend: {blur_op.backend}")
@@ -242,12 +245,12 @@ def main():
     # Data fidelity term (KL divergence)
     f = fn.KullbackLeibler(
         b=emission,
-        eta=emission.get_uniform_copy(1e-6)
+        eta=emission.geometry.allocate(value=1e-6)
     )
     df = fn.OperatorCompositionFunction(f, blur_op)
 
     # Regularization prior (Directional TV)
-    grad = Gradient(emission)
+    grad = GradientOperator(emission.geometry, method="forward", bnd_cond="Neumann")
     grad_anatomy = grad.direct(anatomy)
     d_op = op.CompositionOperator(DirectionalOperator(grad_anatomy), grad)
     prior = alpha * fn.OperatorCompositionFunction(

@@ -28,7 +28,12 @@ class GaussianBlurringOperator(LinearOperator):
     def __init__(self, sigma, domain_geometry, backend='auto'):
         super().__init__(domain_geometry=domain_geometry,
                          range_geometry=domain_geometry)
-        self.sigma = np.array(sigma) / np.array(domain_geometry.voxel_sizes())
+        voxel_sizes = np.array([
+            domain_geometry.voxel_size_z,
+            domain_geometry.voxel_size_y,
+            domain_geometry.voxel_size_x,
+        ])
+        self.sigma = np.array(sigma) / voxel_sizes
         self.psf = self._make_psf(self.sigma)
         # choose backend
         if backend == 'auto':

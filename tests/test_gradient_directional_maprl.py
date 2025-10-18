@@ -1,6 +1,10 @@
+import ctypes
 import importlib
+import importlib.util
 import numpy as np
 import pytest
+from pathlib import Path
+import sys
 
 
 class DummyImage:
@@ -125,16 +129,94 @@ class DummyBlock:
 class DummyGeometry:
     def __init__(self, shape, voxel_sizes=(1.0, 1.0, 1.0)):
         self.shape = shape
-        self._voxel_sizes = voxel_sizes
-
-    def voxel_sizes(self):
-        return self._voxel_sizes
+        self.voxel_size_z, self.voxel_size_y, self.voxel_size_x = voxel_sizes
 
 
-@pytest.fixture
-def gradient_module():
-    module = importlib.import_module("src.gradient")
-    return importlib.reload(module)
+def _require_cil_gradient():
+    def _attempt():
+        from cil.framework import ImageGeometry  # type: ignore
+        from cil.optimisation.operators import GradientOperator  # type: ignore
+        return GradientOperator, ImageGeometry
+
+    try:
+        return _attempt()
+    except Exception as first_error:
+        root = None
+        try:
+            spec = importlib.util.find_spec("cil")
+            if spec and spec.origin:
+                root = Path(spec.origin).resolve()
+        except ValueError:
+            module = sys.modules.get("cil")
+            module_file = getattr(module, "__file__", None) if module else None
+            module_paths = list(getattr(module, "__path__", [])) if module else []
+            if module_file:
+                root = Path(module_file).resolve()
+            elif module_paths:
+                root = Path(module_paths[0]).resolve()
+
+        if root is None:
+            for entry in map(Path, sys.path):
+                candidate = entry / "cil" / "__init__.py"
+                if candidate.exists():
+                    root = candidate.resolve()
+                    break
+
+        if root is not None:
+            candidates = []
+            for parent in root.parents:
+                candidates.append(parent / "lib" / "libcilacc.so")
+                candidates.append(parent / "cil" / "lib" / "libcilacc.so")
+            for candidate in candidates:
+                if candidate.exists():
+                    try:
+                        ctypes.cdll.LoadLibrary(str(candidate))
+                        sys.modules.pop("cil.framework", None)
+                        sys.modules.pop("cil.optimisation.operators", None)
+                        sys.modules.pop("cil.optimisation", None)
+                        if (module := sys.modules.get("cil")) is not None and getattr(module, "__spec__", None) is None:
+                            sys.modules.pop("cil", None)
+                        return _attempt()
+                    except OSError:
+                        continue
+
+        pytest.skip(f"CIL GradientOperator unavailable: {first_error}")
+
+
+def _forward_neumann_diff(data, axis):
+    diff = np.zeros_like(data, dtype=data.dtype)
+    axis_len = data.shape[axis]
+    if axis_len > 1:
+        slicer_curr = [slice(None)] * data.ndim
+        slicer_next = [slice(None)] * data.ndim
+        slicer_curr[axis] = slice(0, axis_len - 1)
+        slicer_next[axis] = slice(1, axis_len)
+        diff[tuple(slicer_curr)] = (
+            data[tuple(slicer_next)] - data[tuple(slicer_curr)]
+        )
+    return diff
+
+
+def _backward_neumann_diff(data, axis):
+    diff = np.zeros_like(data, dtype=data.dtype)
+    axis_len = data.shape[axis]
+    slicer_first = [slice(None)] * data.ndim
+    slicer_first[axis] = 0
+    diff[tuple(slicer_first)] = data[tuple(slicer_first)]
+    if axis_len > 1:
+        slicer_curr = [slice(None)] * data.ndim
+        slicer_prev = [slice(None)] * data.ndim
+        slicer_curr[axis] = slice(1, axis_len)
+        slicer_prev[axis] = slice(0, axis_len - 1)
+        diff[tuple(slicer_curr)] = (
+            data[tuple(slicer_curr)] - data[tuple(slicer_prev)]
+        )
+        slicer_last = [slice(None)] * data.ndim
+        slicer_last[axis] = axis_len - 1
+        slicer_penultimate = [slice(None)] * data.ndim
+        slicer_penultimate[axis] = axis_len - 2
+        diff[tuple(slicer_last)] = -data[tuple(slicer_penultimate)]
+    return diff
 
 
 @pytest.fixture
@@ -155,37 +237,48 @@ def maprl_module():
     return importlib.reload(module)
 
 
-def test_gradient_forward_neumann_direct(gradient_module):
-    torch = pytest.importorskip("torch")
+def test_gradient_forward_neumann_direct():
+    GradientOperator, ImageGeometry = _require_cil_gradient()
+    geometry = ImageGeometry(voxel_num_y=2, voxel_num_x=2)
+    image = geometry.allocate(None)
     data = np.array([[1.0, 2.0], [3.0, 5.0]], dtype=np.float32)
-    image = DummyImage(data)
+    image.fill(data)
 
-    grad_op = gradient_module.Gradient(voxel_sizes=(1.0, 1.0), method="forward")
+    grad_op = GradientOperator(geometry, method="forward", bnd_cond="Neumann", backend="numpy")
     result = grad_op.direct(image)
-    result_arr = np.asarray(result.as_array(), dtype=np.float32)
 
-    expected_axis0 = np.array([[2.0, 3.0], [0.0, 0.0]], dtype=np.float32)
-    expected_axis1 = np.array([[1.0, 0.0], [2.0, 0.0]], dtype=np.float32)
+    components = [
+        result.get_item(i).as_array().astype(np.float32)
+        for i in range(len(result.containers))
+    ]
+    result_arr = np.stack(components, axis=-1)
+
+    expected_axis0 = _forward_neumann_diff(data, axis=0)
+    expected_axis1 = _forward_neumann_diff(data, axis=1)
     expected = np.stack([expected_axis0, expected_axis1], axis=-1)
     assert result_arr.shape == expected.shape
     assert np.allclose(result_arr, expected)
 
 
-def test_gradient_adjoint_matches_manual_divergence(gradient_module):
-    torch = pytest.importorskip("torch")
+def test_gradient_adjoint_matches_manual_divergence():
+    GradientOperator, ImageGeometry = _require_cil_gradient()
+    geometry = ImageGeometry(voxel_num_y=2, voxel_num_x=2)
+    image = geometry.allocate(None)
     data = np.array([[1.0, 2.0], [3.0, 5.0]], dtype=np.float32)
-    image = DummyImage(data)
-    grad_op = gradient_module.Gradient(voxel_sizes=(1.0, 1.0), method="forward")
-    grad_field = grad_op.direct(image).as_array()
+    image.fill(data)
 
-    gradient_tensor = torch.tensor(grad_field)
-    out = DummyImage(np.zeros_like(data))
-    result = grad_op.adjoint(gradient_tensor, out=out)
+    grad_op = GradientOperator(geometry, method="forward", bnd_cond="Neumann", backend="numpy")
+    grad_field = grad_op.direct(image)
+    result = grad_op.adjoint(grad_field)
 
+    gradient_tensor = np.stack(
+        [grad_field.get_item(i).as_array().astype(np.float32) for i in range(len(grad_field.containers))],
+        axis=-1,
+    )
     components = []
-    for axis in range(gradient_tensor.size(-1)):
-        components.append(-grad_op.backward_diff(gradient_tensor[..., axis], axis))
-    expected = torch.stack(components, dim=-1).sum(dim=-1).cpu().numpy()
+    for axis in range(gradient_tensor.shape[-1]):
+        components.append(_backward_neumann_diff(gradient_tensor[..., axis], axis))
+    expected = -np.sum(components, axis=0)
     assert np.allclose(result.as_array(), expected)
 
 

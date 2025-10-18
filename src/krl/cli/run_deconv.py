@@ -14,7 +14,7 @@ try:
     from cil.framework import ImageData
     import cil.optimisation.functions as fn
     import cil.optimisation.operators as op
-    from cil.optimisation.operators import BlurringOperator
+    from cil.optimisation.operators import BlurringOperator, GradientOperator
     from cil.optimisation.utilities.callbacks import Callback
     import cil.optimisation.algorithms as alg
     from cil.utilities.display import show2D
@@ -33,14 +33,22 @@ from krl.cli.config import (
 from krl.operators.directional import DirectionalOperator
 from krl.operators.blurring import create_gaussian_blur
 from krl.algorithms.maprl import MAPRL
-from krl.operators.kernel import get_kernel_operator
-from krl.operators.gradient import Gradient as GradientOperator
+from krl.operators.kernel_operator import get_kernel_operator
 from krl.utils import load_image, save_image
 
 
 def fwhm_to_sigma(fwhm: Tuple[float, float, float]) -> Tuple[float, float, float]:
     scale = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     return tuple(value * scale for value in fwhm)
+
+
+def geometry_voxel_sizes(geometry) -> Tuple[float, float, float]:
+    """Return voxel sizes as (z, y, x) for a CIL ImageGeometry."""
+    return (
+        float(geometry.voxel_size_z),
+        float(geometry.voxel_size_y),
+        float(geometry.voxel_size_x),
+    )
 
 
 def psf(kernel_size: int, fwhm: Tuple[float, float, float], voxel_size: Tuple[float, float, float]) -> np.ndarray:
@@ -104,12 +112,16 @@ def create_blurring_operator(config: PipelineConfig, emission: ImageData):
     try:
         return create_gaussian_blur(
             fwhm_to_sigma(config.fwhm),
-            emission,
+            emission.geometry,
             backend="auto",
         )
     except (ImportError, AttributeError):
         # Fallback to CIL's BlurringOperator
-        kernel = psf(config.psf_kernel_size, config.fwhm, emission.voxel_sizes())
+        kernel = psf(
+            config.psf_kernel_size,
+            config.fwhm,
+            geometry_voxel_sizes(emission.geometry),
+        )
         return BlurringOperator(kernel, emission)
 
 
@@ -136,11 +148,12 @@ def richardson_lucy(
     save_interval: int = 10,
     tag: str = "",
 ):
-    sensitivity = observed.get_uniform_copy(1)
+    geometry = observed.geometry
+    sensitivity = geometry.allocate(value=1)
     effective_blur = blur_op
     if kernel_operator is not None:
         effective_blur = op.CompositionOperator(blur_op, kernel_operator)
-        sensitivity = effective_blur.adjoint(observed.get_uniform_copy(1))
+        sensitivity = effective_blur.adjoint(geometry.allocate(value=1))
 
     current = observed.clone()
     est_blur = effective_blur.direct(current)
@@ -293,10 +306,10 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
     if config.do_drl:
         f = fn.KullbackLeibler(
             b=images["OSEM"],
-            eta=images["OSEM"].get_uniform_copy(1e-6),
+            eta=images["OSEM"].geometry.allocate(value=1e-6),
         )
         df = fn.OperatorCompositionFunction(f, blur)
-        grad = GradientOperator(images["OSEM"])
+        grad = GradientOperator(images["OSEM"].geometry, method="forward", bnd_cond="Neumann")
         grad_ref = grad.direct(images["T1"])
         d_op = op.CompositionOperator(DirectionalOperator(grad_ref), grad)
         prior = config.alpha * fn.OperatorCompositionFunction(

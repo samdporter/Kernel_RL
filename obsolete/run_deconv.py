@@ -26,7 +26,7 @@ from src.deconv_cli import (
 from src.directional_operator import DirectionalOperator
 from src.gaussian_blurring import create_gaussian_blur
 from src.map_rl import MAPRL
-from src.my_kem import get_kernel_operator
+from src.kernel_operator import get_kernel_operator
 
 try:
     from src.gradient import GradientOperator
@@ -37,6 +37,28 @@ except ImportError:
 def fwhm_to_sigma(fwhm: Tuple[float, float, float]) -> Tuple[float, float, float]:
     scale = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     return tuple(value * scale for value in fwhm)
+
+
+def allocate_uniform(image, value):
+    geometry = getattr(image, "geometry", None)
+    if geometry is not None and hasattr(geometry, "allocate"):
+        return geometry.allocate(value=value)
+    clone = image.clone()
+    clone.fill(value)
+    return clone
+
+
+def geometry_voxel_sizes(image) -> Tuple[float, float, float]:
+    geometry = getattr(image, "geometry", None)
+    if geometry is not None and all(
+        hasattr(geometry, attr) for attr in ("voxel_size_z", "voxel_size_y", "voxel_size_x")
+    ):
+        return (
+            float(geometry.voxel_size_z),
+            float(geometry.voxel_size_y),
+            float(geometry.voxel_size_x),
+        )
+    return (1.0, 1.0, 1.0)
 
 
 def psf(kernel_size: int, fwhm: Tuple[float, float, float], voxel_size: Tuple[float, float, float]) -> np.ndarray:
@@ -93,15 +115,22 @@ def save_reference_figures(images: Mapping[str, pet.ImageData], output_dir: Path
 
 
 def create_blurring_operator(config: PipelineConfig, emission: pet.ImageData):
-    try:
-        return create_gaussian_blur(
-            fwhm_to_sigma(config.fwhm),
-            emission,
-            backend="auto",
-        )
-    except ImportError:
-        kernel = psf(config.psf_kernel_size, config.fwhm, emission.voxel_sizes())
-        return BlurringOperator(kernel, emission)
+    geometry = getattr(emission, "geometry", None)
+    if geometry is not None:
+        try:
+            return create_gaussian_blur(
+                fwhm_to_sigma(config.fwhm),
+                geometry,
+                backend="auto",
+            )
+        except ImportError:
+            pass
+    kernel = psf(
+        config.psf_kernel_size,
+        config.fwhm,
+        geometry_voxel_sizes(emission),
+    )
+    return BlurringOperator(kernel, emission)
 
 
 def prepare_kernel_operator(
@@ -127,11 +156,11 @@ def richardson_lucy(
     save_interval: int = 10,
     tag: str = "",
 ):
-    sensitivity = observed.get_uniform_copy(1)
+    sensitivity = allocate_uniform(observed, 1)
     effective_blur = blur_op
     if kernel_operator is not None:
         effective_blur = op.CompositionOperator(blur_op, kernel_operator)
-        sensitivity = effective_blur.adjoint(observed.get_uniform_copy(1))
+        sensitivity = effective_blur.adjoint(allocate_uniform(observed, 1))
 
     current = observed.clone()
     est_blur = effective_blur.direct(current)
@@ -285,7 +314,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
     if config.do_drl:
         f = fn.KullbackLeibler(
             b=images["OSEM"],
-            eta=images["OSEM"].get_uniform_copy(1e-6),
+            eta=allocate_uniform(images["OSEM"], 1e-6),
         )
         df = fn.OperatorCompositionFunction(f, blur)
         grad = GradientOperator(images["OSEM"])

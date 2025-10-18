@@ -12,7 +12,7 @@ This repository has been refactored from a research script collection into a pro
 ```
 KRL/
 ├── src/
-│   ├── my_kem.py
+│   ├── kernel_operator.py
 │   ├── gaussian_blurring.py
 │   ├── gradient.py
 │   ├── directional_operator.py
@@ -28,7 +28,7 @@ KRL/
 ├── src/krl/                      # Proper package structure
 │   ├── __init__.py               # Version and exports
 │   ├── operators/                # Modular operators
-│   │   ├── kernel.py
+│   │   ├── kernel_operator.py
 │   │   ├── blurring.py
 │   │   ├── gradient.py
 │   │   └── directional.py
@@ -107,7 +107,7 @@ img = load_image("data/emission.nii.gz")
 
 **Before:**
 ```python
-from src.my_kem import get_kernel_operator
+from src.kernel_operator import get_kernel_operator
 from src.gaussian_blurring import create_gaussian_blur
 from src.map_rl import MAPRL
 ```
@@ -180,7 +180,7 @@ krl-deconv --data-path data/spheres ...
 ```python
 import sys
 sys.path.insert(0, 'src')
-from my_kem import get_kernel_operator
+from kernel_operator import get_kernel_operator
 ```
 
 **New:**
@@ -219,7 +219,7 @@ pytest --cov=krl            # Test with coverage
 - `scripts/run_deconv_sweeps.py` → `krl-sweep` command
 
 ### Import Paths
-- `from src.my_kem import ...` → `from krl.operators.kernel import ...`
+- `from src.kernel_operator import ...` → `from krl.operators.kernel_operator import ...`
 - `from src.map_rl import ...` → `from krl.algorithms.maprl import ...`
 
 ### Dependency Changes

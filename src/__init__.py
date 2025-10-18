@@ -1,7 +1,7 @@
 """Core operators and utilities for the Kernel-guided reconstruction toolbox."""
 
 __all__ = [
-    "my_kem",
+    "kernel_operator",
     "dd_kem",
     "directional_operator",
     "gaussian_blurring",
@@ -9,4 +9,3 @@ __all__ = [
     "map_rl",
     "utils",
 ]
-

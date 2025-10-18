@@ -5,13 +5,18 @@ from typing import Tuple
 import numpy as np
 import pytest
 
-from src.my_kem import (
+from src.kernel_operator import (
     DEFAULT_PARAMETERS,
     NUMBA_AVAIL,
-    SLIDING_WINDOW_AVAIL,
     KernelOperator,
     get_kernel_operator,
 )
+
+if not NUMBA_AVAIL:
+    pytest.skip(
+        "Numba backend required for kernel operator tests.",
+        allow_module_level=True,
+    )
 
 
 @dataclass
@@ -42,10 +47,7 @@ class DummyImage:
 
 
 def available_backends():
-    backends = ["python"]
-    if NUMBA_AVAIL:
-        backends.append("numba")
-    return backends
+    return ["numba"]
 
 
 @pytest.fixture
@@ -204,20 +206,16 @@ def test_hybrid_adjoint_mormalized_dot_product(geometry, backend):
     dot_adjoint = float(np.sum(x.as_array() * adjoint))
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
 
-def test_mask_requires_sliding_window(geometry):
-    operator = KernelOperator(geometry)
-    operator.set_parameters({**DEFAULT_PARAMETERS, "use_mask": True})
+def test_mask_available_with_numba(geometry):
+    operator = KernelOperator(geometry, use_mask=True, mask_k=3)
     operator.set_anatomical_image(geometry.allocate(0.0))
 
-    if SLIDING_WINDOW_AVAIL:
-        result = operator.direct(geometry.allocate(1.0))
-        assert isinstance(result, DummyImage)
-    else:
-        with pytest.raises(RuntimeError):
-            operator.direct(geometry.allocate(1.0))
+    result = operator.direct(geometry.allocate(1.0))
+    assert isinstance(result, DummyImage)
+    assert operator.mask is not None
+    assert operator.mask.shape[-1] == operator.parameters["num_neighbours"] ** 3
 
 
-@pytest.mark.skipif(not SLIDING_WINDOW_AVAIL, reason="Masking requires sliding_window_view")
 @pytest.mark.parametrize("backend", available_backends())
 def test_mask_selects_expected_neighbours(geometry, backend, anatomical_image_gradient, emission_image_uniform):
     mask_k = 5
@@ -353,7 +351,6 @@ def test_distance_weighting_emphasises_near_voxels(geometry, backend):
     assert np.isclose(res_dist.sum(), spike_arr.sum(), rtol=1e-5, atol=1e-8)
 
 
-@pytest.mark.skipif(not SLIDING_WINDOW_AVAIL, reason="Masking requires sliding_window_view")
 @pytest.mark.parametrize("backend", available_backends())
 def test_mask_k_picks_most_similar_neighbours(geometry, backend):
     mask_k = 7
@@ -411,7 +408,6 @@ def test_mask_k_picks_most_similar_neighbours(geometry, backend):
     assert selected_indices == expected_indices
 
 
-@pytest.mark.skipif(not SLIDING_WINDOW_AVAIL, reason="Full feature adjoint test requires masking support")
 @pytest.mark.parametrize("backend", available_backends())
 def test_adjoint_with_all_features(geometry, backend):
     operator = get_kernel_operator(

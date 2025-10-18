@@ -146,7 +146,7 @@ def parse_common_args(
     parser.add_argument("--emission-file", default=defaults.emission_file)
     parser.add_argument("--guidance-file", default=defaults.guidance_file)
     parser.add_argument(
-        "--backend", choices=["auto", "python", "numba"], default=defaults.backend
+        "--backend", choices=["auto", "numba"], default=defaults.backend
     )
     parser.add_argument("--save-suffix", default=defaults.save_suffix)
     parser.add_argument("--fwhm", type=float, nargs=3, default=list(defaults.fwhm), metavar=("FX", "FY", "FZ"))

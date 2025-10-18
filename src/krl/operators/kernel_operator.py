@@ -11,21 +11,12 @@ except (ImportError, OSError):  # pragma: no cover - optional dependency
 
 from krl.utils import get_array
 
-# try importing sliding_window_view from numpy
-try:
-    from numpy.lib.stride_tricks import sliding_window_view
-
-    SLIDING_WINDOW_AVAIL = True
-except ImportError:  # pragma: no cover - depends on installed numpy
-    SLIDING_WINDOW_AVAIL = False
-
 # Try importing numba
 try:
     import numba
 
     NUMBA_AVAIL = True
 except (ImportError, OSError):  # pragma: no cover - optional dependency
-    NUMBA_AVAIL = False
     NUMBA_AVAIL = False
     numba = None  # type: ignore
 
@@ -47,21 +38,21 @@ DEFAULT_PARAMETERS = {
 
 def get_kernel_operator(domain_geometry, backend="auto", **kwargs):
     """
-    Returns the best available kernel operator.
-    backend: 'auto'|'numba'|'python'
-    auto order: numba → python
+    Returns the kernel operator accelerated with numba.
+    backend: 'auto'|'numba'
     """
     if backend == "auto":
-        backend = "numba" if NUMBA_AVAIL else "python"
-    if backend == "numba" and NUMBA_AVAIL:
-        return NumbaKernelOperator(domain_geometry, **kwargs)
-    elif backend == "python" and SLIDING_WINDOW_AVAIL:
-        return KernelOperator(domain_geometry, **kwargs)
-    else:
+        backend = "numba"
+    if backend != "numba":
         raise ValueError(
-            f"Backend '{backend}' not available. "
-            "Please install numba or numpy with sliding_window_view."
+            f"Backend '{backend}' is no longer supported. "
+            "Only the numba backend is available."
         )
+    if not NUMBA_AVAIL:
+        raise RuntimeError(
+            "Numba backend not available. Please install numba to use the kernel operator."
+        )
+    return KernelOperator(domain_geometry, **kwargs)
 
 
 class BaseKernelOperator(LinearOperator):
@@ -71,10 +62,11 @@ class BaseKernelOperator(LinearOperator):
         self.parameters = default_parameters | kwargs
         self.anatomical_image = None
         self.mask = None
-        self.backend = "python"
+        self.backend = "numba"
         self.freeze_emission_kernel = False
         self.frozen_emission_kernel = None
         self._normalisation_map = None
+        self._full_mask_cache: np.ndarray | None = None
 
     def set_parameters(self, parameters):
         self.parameters.update(parameters)
@@ -93,21 +85,28 @@ class BaseKernelOperator(LinearOperator):
         self.mask = None
 
     def precompute_mask(self):
-        n = self.parameters["num_neighbours"]
-        K = n**3
-        k = self.parameters["mask_k"] or K
-        arr = get_array(self.anatomical_image)
-        pad = n // 2
+        if not NUMBA_AVAIL:
+            raise RuntimeError("Numba backend required for mask precomputation.")
+        if self.anatomical_image is None:
+            raise RuntimeError(
+                "An anatomical image must be set before precomputing a mask."
+            )
+        n = int(self.parameters["num_neighbours"])
+        total = n**3
+        mask_k = self.parameters["mask_k"]
+        k = mask_k if mask_k is not None else total
+        k = max(1, min(int(k), total))
+        arr = np.ascontiguousarray(get_array(self.anatomical_image), dtype=np.float64)
+        return _nb_precompute_mask(arr, n, k)
 
-        arr_p = np.pad(arr, pad, mode="reflect")
-        neigh = sliding_window_view(arr_p, (n, n, n))  # → (S0,S1,S2,n,n,n)
-        S0, S1, S2, _, _, _ = neigh.shape
-        flat = neigh.reshape(S0, S1, S2, K)  # → (S0,S1,S2,K)
-        center = arr[..., None]  # → (S0,S1,S2,1)
-        diff = np.abs(flat - center)  # → (S0,S1,S2,K)
-
-        thresh = np.partition(diff, k - 1, axis=-1)[..., k - 1 : k]  # (S0,S1,S2,1)
-        return diff <= thresh
+    def _get_full_mask(self, shape: tuple[int, int, int], n: int) -> np.ndarray:
+        """Return a cached all-True mask for the current geometry."""
+        expected_shape = (shape[0], shape[1], shape[2], n**3)
+        mask = self._full_mask_cache
+        if mask is None or mask.shape != expected_shape:
+            mask = np.ones(expected_shape, dtype=np.bool_)
+            self._full_mask_cache = mask
+        return mask
 
     def _update_hybrid_reference(self, emission_array: np.ndarray) -> np.ndarray:
         """Store (or reuse) the emission image that defines the hybrid weights."""
@@ -160,7 +159,7 @@ class BaseKernelOperator(LinearOperator):
         return out
 
     def adjoint(self, x, out=None):
-        # default: same as forward for python backend
+        # default: same as forward (kernel remains self-adjoint without mask/hybrid)
         res = self.direct(x)
         if out is None:
             return res
@@ -168,236 +167,11 @@ class BaseKernelOperator(LinearOperator):
         return out
 
 
-class KernelOperator(BaseKernelOperator):
-    def neighbourhood_kernel(
-        self,
-        x,
-        image,
-        num_neighbours,
-        sigma_anat,
-        sigma_dist,
-        sigma_emission,
-        normalize_kernel,
-        use_mask,
-        recalc_mask,
-        distance_weighting,
-        hybrid,
-    ):
-        """Pure Python implementation using explicit loops (slow but correct)."""
-        arr = get_array(image)
-        x_arr = get_array(x)
-        ref_arr = self._update_hybrid_reference(x_arr) if hybrid else x_arr
-        n = num_neighbours
-        half = n // 2
-        s0, s1, s2 = arr.shape
-
-        sig2_an = 2.0 * sigma_anat * sigma_anat
-        dist2_an = 2.0 * sigma_dist * sigma_dist
-        sig2_em = 2.0 * sigma_emission * sigma_emission
-
-        # Precompute distance weights
-        wd_an = np.ones((n, n, n), dtype=np.float64)
-        if distance_weighting:
-            for di in range(-half, half + 1):
-                for dj in range(-half, half + 1):
-                    for dk in range(-half, half + 1):
-                        d2 = di * di + dj * dj + dk * dk
-                        wd_an[di + half, dj + half, dk + half] = np.exp(-d2 / dist2_an)
-
-        # Precompute mask if needed
-        if use_mask:
-            if self.mask is None or recalc_mask:
-                self.mask = self.precompute_mask()
-            mask = self.mask
-        else:
-            mask = None
-
-        out = np.zeros_like(arr, dtype=np.float64)
-        norm_arr = np.zeros_like(arr, dtype=np.float64) if normalize_kernel else None
-
-        for i in range(s0):
-            for j in range(s1):
-                for k in range(s2):
-                    ca = arr[i, j, k]
-                    c_ref = ref_arr[i, j, k]
-                    sumv = 0.0
-                    wsum = 0.0
-
-                    if use_mask:
-                        idx = 0
-
-                    for di in range(-half, half + 1):
-                        ii = i + di
-                        if ii < 0:
-                            ii = -ii - 1
-                        elif ii >= s0:
-                            ii = 2 * s0 - ii - 1
-
-                        for dj in range(-half, half + 1):
-                            jj = j + dj
-                            if jj < 0:
-                                jj = -jj - 1
-                            elif jj >= s1:
-                                jj = 2 * s1 - jj - 1
-
-                            for dk in range(-half, half + 1):
-                                kk = k + dk
-                                if kk < 0:
-                                    kk = -kk - 1
-                                elif kk >= s2:
-                                    kk = 2 * s2 - kk - 1
-
-                                # Check mask
-                                if use_mask:
-                                    if not mask[i, j, k, idx]:
-                                        idx += 1
-                                        continue
-                                    idx += 1
-
-                                # Anatomical weight
-                                diff_an = arr[ii, jj, kk] - ca
-                                wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                                w = wi_an * wd_an[di + half, dj + half, dk + half]
-
-                                # Hybrid emission weight
-                                if hybrid:
-                                    diff_em = ref_arr[ii, jj, kk] - c_ref
-                                    wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                                    w *= wi_em
-
-                                sumv += x_arr[ii, jj, kk] * w
-                                wsum += w
-
-                    if normalize_kernel:
-                        norm = wsum if wsum > 1e-12 else 1.0
-                        if wsum > 1e-12:
-                            sumv /= wsum
-                        norm_arr[i, j, k] = norm
-                    out[i, j, k] = sumv
-
-        result = image.clone()
-        result.fill(out)
-        self._normalisation_map = norm_arr if normalize_kernel else None
-        return result
-
-    def adjoint(self, x, out=None):
-        """Adjoint for Python backend using explicit loops (slow but correct)."""
-        p = self.parameters
-
-        # Only use non-symmetric adjoint when mask or hybrid is used
-        if not (p["use_mask"] or p["hybrid"]):
-            # For pure anatomical kernel without mask, it's self-adjoint
-            res = self.direct(x)
-            if out is None:
-                return res
-            out.fill(get_array(res))
-            return out
-
-        # Non-symmetric adjoint implementation
-        arr = get_array(self.anatomical_image)
-        x_arr = get_array(x)
-        ref_arr = self._get_hybrid_reference() if p["hybrid"] else x_arr
-        norm_arr = self._normalisation_map if p["normalize_kernel"] else None
-        if p["normalize_kernel"] and norm_arr is None:
-            raise RuntimeError(
-                "Normalization map has not been initialised. "
-                "Call direct() before adjoint() when using normalize_kernel=True."
-            )
-        n = p["num_neighbours"]
-        half = n // 2
-        s0, s1, s2 = arr.shape
-
-        sig2_an = 2.0 * p["sigma_anat"] * p["sigma_anat"]
-        dist2_an = 2.0 * p["sigma_dist"] * p["sigma_dist"]
-        sig2_em = 2.0 * p["sigma_emission"] * p["sigma_emission"]
-
-        # Precompute distance weights
-        wd_an = np.ones((n, n, n), dtype=np.float64)
-        if p["distance_weighting"]:
-            for di in range(-half, half + 1):
-                for dj in range(-half, half + 1):
-                    for dk in range(-half, half + 1):
-                        d2 = di * di + dj * dj + dk * dk
-                        wd_an[di + half, dj + half, dk + half] = np.exp(-d2 / dist2_an)
-
-        # Precompute mask if needed
-        if p["use_mask"]:
-            if self.mask is None or p["recalc_mask"]:
-                self.mask = self.precompute_mask()
-            mask = self.mask
-        else:
-            mask = None
-
-        result = np.zeros((s0, s1, s2), dtype=np.float64)
-
-        for i in range(s0):
-            for j in range(s1):
-                for k in range(s2):
-                    cv = arr[i, j, k]
-                    val = x_arr[i, j, k]
-                    if norm_arr is not None:
-                        norm = norm_arr[i, j, k]
-                        val = val / norm if norm > 1e-12 else 0.0
-                    c_ref = ref_arr[i, j, k]
-
-                    if p["use_mask"]:
-                        idx = 0
-
-                    for di in range(-half, half + 1):
-                        ii = i + di
-                        if ii < 0:
-                            ii = -ii - 1
-                        elif ii >= s0:
-                            ii = 2 * s0 - ii - 1
-
-                        for dj in range(-half, half + 1):
-                            jj = j + dj
-                            if jj < 0:
-                                jj = -jj - 1
-                            elif jj >= s1:
-                                jj = 2 * s1 - jj - 1
-
-                            for dk in range(-half, half + 1):
-                                kk = k + dk
-                                if kk < 0:
-                                    kk = -kk - 1
-                                elif kk >= s2:
-                                    kk = 2 * s2 - kk - 1
-
-                                # Check mask
-                                do_weight = True
-                                if p["use_mask"]:
-                                    do_weight = mask[i, j, k, idx]
-                                    idx += 1
-
-                                if do_weight:
-                                    # Anatomical weight
-                                    diff_an = arr[ii, jj, kk] - cv
-                                    wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                                    w = wi_an * wd_an[di + half, dj + half, dk + half]
-
-                                    # Hybrid emission weight
-                                    if p["hybrid"]:
-                                        diff_em = ref_arr[ii, jj, kk] - c_ref
-                                        wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                                        w *= wi_em
-
-                                    result[ii, jj, kk] += val * w
-
-        img = x.clone()
-        img.fill(result)
-
-        if out is None:
-            return img
-        out.fill(result)
-        return out
-
-
 if NUMBA_AVAIL:
     # --- existing numba kernels (_nb_kernel, _nb_kernel_mask, _nb_adjoint) ---
     # (unchanged, already include hybrid in the mask‐kernel version)
 
-    class NumbaKernelOperator(BaseKernelOperator):
+    class KernelOperator(BaseKernelOperator):
         def __init__(self, domain_geometry, **kwargs):
             super().__init__(domain_geometry, **kwargs)
             self.backend = "numba"
@@ -429,13 +203,12 @@ if NUMBA_AVAIL:
             if use_mask:
                 if self.mask is None or recalc_mask:
                     self.mask = self.precompute_mask()
-                mask_int = self.mask.astype(np.int8)
                 res = _nb_kernel_mask(
                     x_arr,
                     ref_arr,
                     arr,
                     norm_arr,
-                    mask_int,
+                    self.mask,
                     n,
                     sigma_anat,
                     sigma_dist,
@@ -445,7 +218,7 @@ if NUMBA_AVAIL:
                     hybrid,
                 )
             elif hybrid:
-                full_mask = np.ones((arr.shape[0], arr.shape[1], arr.shape[2], n**3), dtype=np.int8)
+                full_mask = self._get_full_mask(arr.shape, n)
                 res = _nb_kernel_mask(
                     x_arr,
                     ref_arr,
@@ -495,41 +268,30 @@ if NUMBA_AVAIL:
                     "Call direct() before adjoint() when using normalize_kernel=True."
                 )
 
-            if p["use_mask"] or p["hybrid"]:
+            n = p["num_neighbours"]
+            if p["use_mask"]:
                 if self.mask is None or p["recalc_mask"]:
                     self.mask = self.precompute_mask()
-                mask_int = self.mask.astype(np.int8)
-                ref_arr = self._get_hybrid_reference() if p["hybrid"] else x_arr
-
-                res = _nb_adjoint(
-                    x_arr,
-                    ref_arr,
-                    arr,
-                    norm_arr,
-                    mask_int,
-                    p["use_mask"],
-                    p["num_neighbours"],
-                    p["sigma_anat"],
-                    p["sigma_dist"],
-                    p["sigma_emission"],
-                    p["distance_weighting"],
-                    p["hybrid"],
-                )
+                mask = self.mask
             else:
-                # self-adjoint for pure anatomical
-                res = _nb_kernel(
-                    x_arr,
-                    x_arr,
-                    arr,
-                    norm_arr,
-                    p["num_neighbours"],
-                    p["sigma_anat"],
-                    p["sigma_dist"],
-                    p["sigma_emission"],
-                    p["normalize_kernel"],
-                    p["distance_weighting"],
-                    p["hybrid"],
-                )
+                mask = self._get_full_mask(arr.shape, n)
+
+            ref_arr = self._get_hybrid_reference() if p["hybrid"] else x_arr
+
+            res = _nb_adjoint(
+                x_arr,
+                ref_arr,
+                arr,
+                norm_arr,
+                mask,
+                p["use_mask"],
+                n,
+                p["sigma_anat"],
+                p["sigma_dist"],
+                p["sigma_emission"],
+                p["distance_weighting"],
+                p["hybrid"],
+            )
 
             img = x.clone()
             img.fill(res)
@@ -540,18 +302,75 @@ if NUMBA_AVAIL:
 
 
     @numba.njit(cache=True, parallel=True)
+    def _nb_precompute_mask(anat_arr, n, k_keep):
+        s0, s1, s2 = anat_arr.shape
+        total = n ** 3
+        half = n // 2
+        mask = np.zeros((s0, s1, s2, total), dtype=np.bool_)
+
+        for i in numba.prange(s0):
+            for j in range(s1):
+                for k in range(s2):
+                    diffs = np.empty(total, dtype=np.float64)
+                    center = anat_arr[i, j, k]
+                    idx = 0
+
+                    for di in range(-half, half + 1):
+                        ii = i + di
+                        if ii < 0:
+                            ii = -ii - 1
+                        elif ii >= s0:
+                            ii = 2 * s0 - ii - 1
+                        for dj in range(-half, half + 1):
+                            jj = j + dj
+                            if jj < 0:
+                                jj = -jj - 1
+                            elif jj >= s1:
+                                jj = 2 * s1 - jj - 1
+                            for dk in range(-half, half + 1):
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
+
+                                diffs[idx] = abs(anat_arr[ii, jj, kk] - center)
+                                idx += 1
+
+                    sorted_diffs = np.sort(diffs)
+                    threshold = sorted_diffs[k_keep - 1]
+                    idx = 0
+
+                    for di in range(-half, half + 1):
+                        ii = i + di
+                        if ii < 0:
+                            ii = -ii - 1
+                        elif ii >= s0:
+                            ii = 2 * s0 - ii - 1
+                        for dj in range(-half, half + 1):
+                            jj = j + dj
+                            if jj < 0:
+                                jj = -jj - 1
+                            elif jj >= s1:
+                                jj = 2 * s1 - jj - 1
+                            for dk in range(-half, half + 1):
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
+
+                                mask[i, j, k, idx] = diffs[idx] <= threshold
+                                idx += 1
+
+        return mask
+
+
+    @numba.njit(cache=True, parallel=True)
     def _nb_kernel(
-        x_arr,
-        ref_arr,
-        anat_arr,
-        norm_arr,
-        n,
-        sigma_anat,
-        sigma_dist,
-        sigma_emission,
-        normalize,
-        distance_weighting,
-        hybrid,
+        x_arr, ref_arr, anat_arr, norm_arr, n,
+        sigma_anat, sigma_dist, sigma_emission,
+        normalize, distance_weighting, hybrid,
     ):
         s0, s1, s2 = anat_arr.shape
         half = n // 2
@@ -559,7 +378,6 @@ if NUMBA_AVAIL:
         dist2_an = 2.0 * sigma_dist * sigma_dist
         sig2_em = 2.0 * sigma_emission * sigma_emission
 
-        # precompute spatial weights
         wd_an = np.ones((n, n, n), dtype=np.float64)
         if distance_weighting:
             for di in range(-half, half + 1):
@@ -597,23 +415,24 @@ if NUMBA_AVAIL:
                                 elif kk >= s2:
                                     kk = 2 * s2 - kk - 1
 
-                            # anat weight
-                            diff_an = anat_arr[ii, jj, kk] - ca
-                            wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                            w = wi_an * wd_an[di + half, dj + half, dk + half]
-                            if hybrid:
-                                diff_em = ref_arr[ii, jj, kk] - c_ref
-                                wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                                w *= wi_em
+                                # weights & accumulation MUST be inside dk-loop
+                                diff_an = anat_arr[ii, jj, kk] - ca
+                                wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                w = wi_an * wd_an[di + half, dj + half, dk + half]
+                                if hybrid:
+                                    diff_em = ref_arr[ii, jj, kk] - c_ref
+                                    wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
+                                    w *= wi_em
 
-                            sumv += x_arr[ii, jj, kk] * w
-                            wsum += w
+                                sumv += x_arr[ii, jj, kk] * w
+                                wsum += w
 
                     if normalize:
-                        norm = wsum if wsum > 1e-12 else 1.0
                         if wsum > 1e-12:
                             sumv /= wsum
-                        norm_arr[i, j, k] = norm
+                            norm_arr[i, j, k] = wsum
+                        else:
+                            norm_arr[i, j, k] = 1.0
                     out[i, j, k] = sumv
 
         return out
@@ -780,3 +599,12 @@ if NUMBA_AVAIL:
                                 idx += 1
 
         return out
+
+
+else:
+
+    class KernelOperator(BaseKernelOperator):  # type: ignore[override]
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "Numba backend not available. Please install numba to use KernelOperator."
+            )
