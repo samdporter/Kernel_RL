@@ -1,7 +1,5 @@
 import numpy as np
 
-np.seterr(over="raise", invalid="raise")
-
 try:
     from cil.optimisation.operators import LinearOperator
 except (ImportError, OSError):  # pragma: no cover - optional dependency
@@ -9,7 +7,7 @@ except (ImportError, OSError):  # pragma: no cover - optional dependency
         def __init__(self, *args, **kwargs) -> None:
             self.__dict__.update(kwargs)
 
-from krl.utils import get_array
+from krl.utils import get_array  # noqa: E402
 
 # Try importing numba
 try:
@@ -24,12 +22,12 @@ except (ImportError, OSError):  # pragma: no cover - optional dependency
 DEFAULT_PARAMETERS = {
     "num_neighbours": 5,
     "sigma_anat": 0.1,
-    "sigma_dist": 0.1,
+    "sigma_dist": 10000,
     "sigma_emission": 0.1,
-    "normalize_features": False,
-    "normalize_kernel": False,
-    "use_mask": False,
-    "mask_k": None,
+    "normalize_features": True,
+    "normalize_kernel": True,
+    "use_mask": True,
+    "mask_k": 20,
     "recalc_mask": False,
     "distance_weighting": False,
     "hybrid": False,

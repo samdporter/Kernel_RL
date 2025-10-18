@@ -6,7 +6,8 @@ class DirectionalOperator(LinearOperator):
     def __init__(self, anatomical_gradient, gamma = 1, eta=1e-6):
 
         self.anatomical_gradient = anatomical_gradient
-        geometry = BlockGeometry(*anatomical_gradient.containers)
+        geometries = tuple(container.geometry for container in anatomical_gradient.containers)
+        geometry = BlockGeometry(*geometries)
         self.tmp = self.anatomical_gradient.containers[0].clone()
 
         self.gamma = gamma

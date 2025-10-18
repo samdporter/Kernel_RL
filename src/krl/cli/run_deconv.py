@@ -90,17 +90,14 @@ def save_reference_figures(images: Mapping[str, ImageData], output_dir: Path) ->
     )
     fig.save(output_dir / "OSEM_T1.png")
 
-    fig, ax = plt.subplots(2, 2, figsize=(10, 5))
-    mid = images["OSEM"].shape[0] // 2
-    quarter = images["OSEM"].shape[0] // 4
-    slices = [quarter, 3 * quarter]
-    for idx, z in enumerate(slices):
-        row, col = divmod(idx, 2)
-        ax[row, col].imshow(images["OSEM"].as_array()[z], cmap="gray")
-        ax[row, col].set_title("OSEM")
-        ax[row, col + 1].imshow(images["T1"].as_array()[z], cmap="gray")
-        ax[row, col + 1].set_title("T1")
-    for axis in ax.flat:
+    slices = [images["OSEM"].shape[0] // 4, 3 * images["OSEM"].shape[0] // 4]
+    fig, ax = plt.subplots(len(slices), 2, figsize=(10, 5))
+    for row, z in enumerate(slices):
+        ax[row, 0].imshow(images["OSEM"].as_array()[z], cmap="gray")
+        ax[row, 0].set_title("OSEM")
+        ax[row, 1].imshow(images["T1"].as_array()[z], cmap="gray")
+        ax[row, 1].set_title("T1")
+    for axis in np.atleast_1d(ax).ravel():
         axis.axis("off")
     plt.tight_layout()
     plt.savefig(output_dir / "OSEM_T1_quarter_slices.png")
@@ -141,6 +138,7 @@ def richardson_lucy(
     observed: ImageData,
     blur_op,
     iterations: int,
+    freeze_iteration: int = 0,
     *,
     epsilon: float = 1e-10,
     kernel_operator=None,
@@ -162,6 +160,8 @@ def richardson_lucy(
     for idx in range(iterations):
         current *= effective_blur.adjoint(observed / (est_blur + epsilon))
         current /= (sensitivity + epsilon)
+        with np.errstate(invalid="ignore"):
+            current.maximum(0, out=current)
         est_blur = effective_blur.direct(current)
         obj = (est_blur - observed * (est_blur + epsilon).log()).sum()
         objective_values.append(obj)
@@ -169,6 +169,9 @@ def richardson_lucy(
         if (idx + 1) % save_interval == 0:
             output = kernel_operator.direct(current) if kernel_operator else current
             save_image(output, save_dir / f"{tag}deconv_iter_{idx+1}.nii.gz")
+        if freeze_iteration > 0 and (idx + 1) == freeze_iteration and kernel_operator is not None:
+            # Freeze the kernel operator (no further updates)
+            kernel_operator.freeze_emission_kernel = True
 
     return current, objective_values
 
@@ -250,9 +253,12 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             images["OSEM"],
             blur,
             iterations=config.rl_iterations_standard,
+            freeze_iteration=config.freeze_iteration,
             save_dir=output_dir,
             tag="rl_",
         )
+        with np.errstate(invalid="ignore"):
+            rl_img.maximum(0, out=rl_img)
         reconstructions["RL"] = rl_img
         save_comparison(
             rl_img,
@@ -281,6 +287,8 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             tag="kernel_",
         )
         deconv_kernel = kernel_operator.direct(kalpha)
+        with np.errstate(invalid="ignore"):
+            deconv_kernel.maximum(0, out=deconv_kernel)
         reconstructions["KRL"] = deconv_kernel
         save_comparison(
             deconv_kernel,
@@ -323,6 +331,8 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
 
             def __call__(self, algorithm: alg.Algorithm) -> None:  # type: ignore[override]
                 if algorithm.iteration % self.interval == 0:
+                    with np.errstate(invalid="ignore"):
+                        algorithm.solution.maximum(0, out=algorithm.solution)
                     save_image(
                         algorithm.solution,
                         output_dir / f"dtv_iter_{algorithm.iteration}.nii.gz"
@@ -342,6 +352,8 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             callbacks=[SaveCallback(10)],
         )
         deconv_dtv = maprl.solution
+        with np.errstate(invalid="ignore"):
+            deconv_dtv.maximum(0, out=deconv_dtv)
         reconstructions["DTV"] = deconv_dtv
         save_comparison(
             deconv_dtv,

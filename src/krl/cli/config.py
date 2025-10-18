@@ -53,6 +53,7 @@ class KernelParameters:
 @dataclass
 class PipelineConfig:
     data_path: Path = Path("data")
+    output_root: Path = Path("results")
     emission_file: str = "OSEM_b1337_n5.hv"
     guidance_file: str = "T1_b1337.hv"
     backend: str = "numba"
@@ -67,6 +68,7 @@ class PipelineConfig:
     bw_seed: int = 1337
     rl_iterations_kernel: int = 100
     rl_iterations_standard: int = 100
+    freeze_iteration: int = 0
     dtv_iterations: int = 100
     alpha: float = 0.1
     step_size: float = 1.0
@@ -98,13 +100,14 @@ class PipelineConfig:
                 f"_eta{self._fmt(self.relaxation_eta)}"
             )
         suffix = "_".join(parts) + f"_G{self._fmt(self.fwhm[0])}mm"
-        return self.data_path / suffix
+        return self.output_root / suffix
 
     def summary_lines(self, kernel: KernelParameters) -> Iterable[str]:
         yield "Deconvolution configuration:"
         yield f"  data_path: {self.data_path}"
         yield f"  emission_file: {self.emission_file}"
         yield f"  guidance_file: {self.guidance_file}"
+        yield f"  output_root: {self.output_root}"
         yield f"  backend: {self.backend}"
         yield f"  show_plots: {self.show_plots}"
         yield f"  flip_emission: {self.flip_emission}"
@@ -113,6 +116,7 @@ class PipelineConfig:
         yield f"  run DRL: {self.do_drl}"
         yield f"  rl_iterations_standard: {self.rl_iterations_standard}"
         yield f"  rl_iterations_kernel: {self.rl_iterations_kernel}"
+        yield f"  freeze_iteration: {self.freeze_iteration}"
         yield f"  dtv_iterations: {self.dtv_iterations}"
         yield f"  psf_kernel_size: {self.psf_kernel_size}"
         yield f"  fwhm: {self.fwhm}"
@@ -145,6 +149,7 @@ def parse_common_args(
     parser.add_argument("--data-path", type=Path, default=defaults.data_path)
     parser.add_argument("--emission-file", default=defaults.emission_file)
     parser.add_argument("--guidance-file", default=defaults.guidance_file)
+    parser.add_argument("--output-root", type=Path, default=defaults.output_root)
     parser.add_argument(
         "--backend", choices=["auto", "numba"], default=defaults.backend
     )
@@ -156,6 +161,7 @@ def parse_common_args(
     parser.add_argument("--bw-seed", type=int, default=defaults.bw_seed)
     parser.add_argument("--rl-iterations-standard", type=int, default=defaults.rl_iterations_standard)
     parser.add_argument("--rl-iterations-kernel", type=int, default=defaults.rl_iterations_kernel)
+    parser.add_argument("--freeze-iteration", type=int, default=defaults.freeze_iteration)
     if include_drl:
         parser.add_argument("--dtv-iterations", type=int, default=defaults.dtv_iterations)
         parser.add_argument("--alpha", type=float, default=defaults.alpha)
@@ -203,6 +209,7 @@ def parse_common_args(
         data_path=args.data_path,
         emission_file=args.emission_file,
         guidance_file=args.guidance_file,
+        output_root=args.output_root,
         backend=args.backend,
         show_plots=args.show_plots,
         flip_emission=args.flip_emission,
@@ -214,6 +221,7 @@ def parse_common_args(
         bw_seed=args.bw_seed,
         rl_iterations_kernel=args.rl_iterations_kernel,
         rl_iterations_standard=args.rl_iterations_standard,
+        freeze_iteration=args.freeze_iteration,
         dtv_iterations=getattr(args, "dtv_iterations", defaults.dtv_iterations),
         alpha=getattr(args, "alpha", defaults.alpha),
         step_size=getattr(args, "step_size", defaults.step_size),

@@ -1,3 +1,5 @@
+import numpy as np
+
 try:
     from cil.optimisation.algorithms import Algorithm
 except ImportError:
@@ -40,7 +42,8 @@ class MAPRL(Algorithm):
         
         grad = self.data_fidelity.gradient(self.x) + self.prior.gradient(self.x)
         self.x = self.x - (self.x + self.eps) * grad * self.step_size()
-        self.x.maximum(0, out=self.x)
+        with np.errstate(invalid="ignore"):
+            self.x.maximum(0, out=self.x)
 
     def update_objective(self):
         self.loss.append(self.data_fidelity(self.x) + self.prior(self.x))
