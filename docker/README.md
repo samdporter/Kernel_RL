@@ -51,7 +51,7 @@ docker-compose down               # Remove
 - Python 3.10 + Conda
 - CIL from conda-forge
 - All dependencies (numpy, scipy, matplotlib, nibabel)
-- Optional: numba, torch, cupy
+- Optional: numba, torch
 - Dev tools: pytest, black, flake8
 
 ## Your Files

@@ -33,7 +33,7 @@ echo ""
 
 # Check optional dependencies
 echo "4. Checking optional dependencies..."
-for pkg in numba torch cupy; do
+for pkg in numba torch; do
     python -c "import $pkg; print(f'  {\"$pkg\":.<20} ✓ (version: {$pkg.__version__})')" 2>/dev/null
     if [ $? -ne 0 ]; then
         echo "  $pkg ........................ (not installed - optional)"

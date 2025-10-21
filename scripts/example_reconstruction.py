@@ -149,7 +149,7 @@ def main():
 
     # KRL parameters
     krl_params = {
-        "num_neighbours": 9,          # 9x9x9 neighbourhood
+        "num_neighbours": 7,          # 9x9x9 neighbourhood
         "sigma_anat": 1.0,            # Anatomical similarity weight
         "sigma_dist": 3.0,            # Spatial distance weight
         "sigma_emission": 1.0,        # Emission similarity (for hybrid)

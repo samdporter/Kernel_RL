@@ -107,6 +107,17 @@ def _install_torch_stub() -> None:
     if "torch" in sys.modules:
         return
 
+    try:
+        import importlib
+
+        # Prefer the real PyTorch package when it is installed
+        torch_module = importlib.import_module("torch")
+        if torch_module is not None:
+            return
+    except Exception:
+        # Clean up any partially imported torch module before installing the stub
+        sys.modules.pop("torch", None)
+
     import numpy as np
 
     torch = types.ModuleType("torch")

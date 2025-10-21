@@ -36,76 +36,21 @@ DEFAULT_PARAMETERS = {
 
 def get_kernel_operator(domain_geometry, backend="auto", **kwargs):
     """
-    Returns the kernel operator with automatic backend selection.
-
-    Parameters
-    ----------
-    domain_geometry : ImageGeometry
-        Domain geometry for the operator
-    backend : str, optional
-        Backend to use: 'auto', 'torch', or 'numba'
-        - 'auto': Try torch (GPU) first, fall back to numba (CPU)
-        - 'torch': Use PyTorch GPU backend (requires torch + CUDA)
-        - 'numba': Use Numba CPU backend
-    **kwargs
-        Additional parameters passed to the operator
-
-    Returns
-    -------
-    BaseKernelOperator
-        Kernel operator instance (TorchKernelOperator or KernelOperator)
-
-    Examples
-    --------
-    Auto-select backend (prefers GPU):
-    >>> op = get_kernel_operator(geometry, backend='auto')
-
-    Force GPU:
-    >>> op = get_kernel_operator(geometry, backend='torch', dtype='float32')
-
-    Force CPU:
-    >>> op = get_kernel_operator(geometry, backend='numba')
+    Returns the kernel operator accelerated with numba.
+    backend: 'auto'|'numba'
     """
     if backend == "auto":
-        # Try torch (GPU) first, fall back to numba (CPU)
-        for b in ('torch', 'numba'):
-            try:
-                if b == 'torch':
-                    import torch
-                    if torch.cuda.is_available():
-                        backend = 'torch'
-                        break
-                elif b == 'numba':
-                    import numba
-                    backend = 'numba'
-                    break
-            except ImportError:
-                continue
-
-        # If nothing worked, default to numba and let it raise error if not available
-        if backend == 'auto':
-            backend = 'numba'
-
-    if backend == 'torch':
-        try:
-            from .gpu_kernel_operator import TorchKernelOperator
-            return TorchKernelOperator(domain_geometry, **kwargs)
-        except ImportError as e:
-            raise RuntimeError(
-                f"PyTorch backend not available: {e}\n"
-                "Install pytorch with: pip install torch torchvision"
-            )
-    elif backend == 'numba':
-        if not NUMBA_AVAIL:
-            raise RuntimeError(
-                "Numba backend not available. Please install numba to use the kernel operator."
-            )
-        return KernelOperator(domain_geometry, **kwargs)
-    else:
+        backend = "numba"
+    if backend != "numba":
         raise ValueError(
-            f"Backend '{backend}' not supported. "
-            "Use 'auto', 'torch', or 'numba'."
+            f"Backend '{backend}' is no longer supported. "
+            "Only the numba backend is available."
         )
+    if not NUMBA_AVAIL:
+        raise RuntimeError(
+            "Numba backend not available. Please install numba to use the kernel operator."
+        )
+    return KernelOperator(domain_geometry, **kwargs)
 
 
 class BaseKernelOperator(LinearOperator):
@@ -298,30 +243,17 @@ if NUMBA_AVAIL:
             if self._anatomical_weights is None:
                 self._anatomical_weights = self.precompute_anatomical_weights()
 
-            # Use sparse or dense pre-computed kernel based on masking
-            if use_mask:
-                res = _nb_kernel_precomputed_sparse(
-                    x_arr,
-                    ref_arr,
-                    self._anatomical_weights,
-                    self.mask,
-                    norm_arr,
-                    n,
-                    sigma_emission,
-                    normalize_kernel,
-                    hybrid,
-                )
-            else:
-                res = _nb_kernel_precomputed(
-                    x_arr,
-                    ref_arr,
-                    self._anatomical_weights,
-                    norm_arr,
-                    n,
-                    sigma_emission,
-                    normalize_kernel,
-                    hybrid,
-                )
+            # Use pre-computed kernel
+            res = _nb_kernel_precomputed(
+                x_arr,
+                ref_arr,
+                self._anatomical_weights,
+                norm_arr,
+                n,
+                sigma_emission,
+                normalize_kernel,
+                hybrid,
+            )
 
             out = image.clone()
             out.fill(res)
@@ -351,28 +283,16 @@ if NUMBA_AVAIL:
 
             ref_arr = self._get_hybrid_reference() if p["hybrid"] else x_arr
 
-            # Use sparse or dense pre-computed adjoint kernel based on masking
-            if p["use_mask"]:
-                res = _nb_adjoint_precomputed_sparse(
-                    x_arr,
-                    ref_arr,
-                    self._anatomical_weights,
-                    self.mask,
-                    norm_arr,
-                    n,
-                    p["sigma_emission"],
-                    p["hybrid"],
-                )
-            else:
-                res = _nb_adjoint_precomputed(
-                    x_arr,
-                    ref_arr,
-                    self._anatomical_weights,
-                    norm_arr,
-                    n,
-                    p["sigma_emission"],
-                    p["hybrid"],
-                )
+            # Use pre-computed adjoint kernel
+            res = _nb_adjoint_precomputed(
+                x_arr,
+                ref_arr,
+                self._anatomical_weights,
+                norm_arr,
+                n,
+                p["sigma_emission"],
+                p["hybrid"],
+            )
 
             img = x.clone()
             img.fill(res)
@@ -382,17 +302,12 @@ if NUMBA_AVAIL:
             return out
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True, parallel=True)
     def _nb_precompute_mask(anat_arr, n, k_keep):
-        """
-        Precompute sparse mask as integer indices of the k_keep most similar neighbors.
-        Returns shape (s0, s1, s2, k_keep) with integer indices in [0, n³).
-        """
         s0, s1, s2 = anat_arr.shape
         total = n ** 3
         half = n // 2
-        # Return sparse indices instead of boolean mask
-        mask_indices = np.zeros((s0, s1, s2, k_keep), dtype=np.int32)
+        mask = np.zeros((s0, s1, s2, total), dtype=np.bool_)
 
         for i in numba.prange(s0):
             for j in range(s1):
@@ -423,15 +338,36 @@ if NUMBA_AVAIL:
                                 diffs[idx] = abs(anat_arr[ii, jj, kk] - center)
                                 idx += 1
 
-                    # Find indices of k_keep smallest differences
-                    # Using argsort (partial sort would be better but numba doesn't support it well)
-                    sorted_indices = np.argsort(diffs)
-                    mask_indices[i, j, k, :] = sorted_indices[:k_keep]
+                    sorted_diffs = np.sort(diffs)
+                    threshold = sorted_diffs[k_keep - 1]
+                    idx = 0
 
-        return mask_indices
+                    for di in range(-half, half + 1):
+                        ii = i + di
+                        if ii < 0:
+                            ii = -ii - 1
+                        elif ii >= s0:
+                            ii = 2 * s0 - ii - 1
+                        for dj in range(-half, half + 1):
+                            jj = j + dj
+                            if jj < 0:
+                                jj = -jj - 1
+                            elif jj >= s1:
+                                jj = 2 * s1 - jj - 1
+                            for dk in range(-half, half + 1):
+                                kk = k + dk
+                                if kk < 0:
+                                    kk = -kk - 1
+                                elif kk >= s2:
+                                    kk = 2 * s2 - kk - 1
+
+                                mask[i, j, k, idx] = diffs[idx] <= threshold
+                                idx += 1
+
+        return mask
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True, parallel=True)
     def _nb_precompute_anatomical_weights(anat_arr, n, sigma_anat, sigma_dist, distance_weighting):
         """
         Pre-compute anatomical weights for all voxels and all n³ neighbors.
@@ -487,20 +423,19 @@ if NUMBA_AVAIL:
         return weights
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
-    def _nb_precompute_anatomical_weights_mask(anat_arr, mask_indices, n, sigma_anat, sigma_dist, distance_weighting):
+    @numba.njit(cache=True, parallel=True)
+    def _nb_precompute_anatomical_weights_mask(anat_arr, mask, n, sigma_anat, sigma_dist, distance_weighting):
         """
-        Pre-compute anatomical weights for all voxels using sparse mask indices.
-        mask_indices: shape (s0, s1, s2, k) with integer indices in [0, n³)
-        Returns: shape (s0, s1, s2, k) with weights for valid neighbors only.
+        Pre-compute anatomical weights for all voxels and masked neighbors.
+        Returns shape: (s0, s1, s2, n³) with zeros for masked-out neighbors.
         """
         s0, s1, s2 = anat_arr.shape
         half = n // 2
-        k = mask_indices.shape[3]  # Number of kept neighbors
+        total = n ** 3
         sig2_an = 2.0 * sigma_anat * sigma_anat
         dist2_an = 2.0 * sigma_dist * sigma_dist
 
-        # Pre-compute distance weights for all possible offsets
+        # Pre-compute distance weights
         wd_an = np.ones((n, n, n), dtype=np.float64)
         if distance_weighting:
             for di in range(-half, half + 1):
@@ -509,44 +444,38 @@ if NUMBA_AVAIL:
                         d2 = di * di + dj * dj + dk * dk
                         wd_an[di + half, dj + half, dk + half] = np.exp(-d2 / dist2_an)
 
-        # Sparse weights - only store k neighbors per voxel
-        weights = np.zeros((s0, s1, s2, k), dtype=np.float64)
+        weights = np.zeros((s0, s1, s2, total), dtype=np.float64)
 
         for i in numba.prange(s0):
             for j in range(s1):
-                for k_vox in range(s2):
-                    ca = anat_arr[i, j, k_vox]
+                for k in range(s2):
+                    ca = anat_arr[i, j, k]
+                    idx = 0
 
-                    # Iterate only over the k valid neighbors
-                    for k_idx in range(k):
-                        flat_idx = mask_indices[i, j, k_vox, k_idx]
+                    for di in range(-half, half + 1):
+                        for dj in range(-half, half + 1):
+                            for dk in range(-half, half + 1):
+                                if mask[i, j, k, idx]:
+                                    ii = i + di
+                                    if ii < 0:
+                                        ii = -ii - 1
+                                    elif ii >= s0:
+                                        ii = 2 * s0 - ii - 1
+                                    jj = j + dj
+                                    if jj < 0:
+                                        jj = -jj - 1
+                                    elif jj >= s1:
+                                        jj = 2 * s1 - jj - 1
+                                    kk = k + dk
+                                    if kk < 0:
+                                        kk = -kk - 1
+                                    elif kk >= s2:
+                                        kk = 2 * s2 - kk - 1
 
-                        # Convert flat index back to (di, dj, dk) offset
-                        dk = (flat_idx % n) - half
-                        dj = ((flat_idx // n) % n) - half
-                        di = (flat_idx // (n * n)) - half
-
-                        # Apply boundary conditions
-                        ii = i + di
-                        if ii < 0:
-                            ii = -ii - 1
-                        elif ii >= s0:
-                            ii = 2 * s0 - ii - 1
-                        jj = j + dj
-                        if jj < 0:
-                            jj = -jj - 1
-                        elif jj >= s1:
-                            jj = 2 * s1 - jj - 1
-                        kk = k_vox + dk
-                        if kk < 0:
-                            kk = -kk - 1
-                        elif kk >= s2:
-                            kk = 2 * s2 - kk - 1
-
-                        # Compute anatomical weight
-                        diff_an = anat_arr[ii, jj, kk] - ca
-                        wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
-                        weights[i, j, k_vox, k_idx] = wi_an * wd_an[di + half, dj + half, dk + half]
+                                    diff_an = anat_arr[ii, jj, kk] - ca
+                                    wi_an = np.exp(-(diff_an * diff_an) / sig2_an)
+                                    weights[i, j, k, idx] = wi_an * wd_an[di + half, dj + half, dk + half]
+                                idx += 1
 
         return weights
 
@@ -786,7 +715,7 @@ if NUMBA_AVAIL:
         return out
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True, parallel=True)
     def _nb_kernel_precomputed(
         x_arr,
         ref_arr,
@@ -798,7 +727,7 @@ if NUMBA_AVAIL:
         hybrid,
     ):
         """
-        Forward kernel using pre-computed anatomical weights (dense version, no mask).
+        Forward kernel using pre-computed anatomical weights.
         Only calculates emission weights (if hybrid) and applies to data.
         """
         s0, s1, s2 = x_arr.shape
@@ -859,88 +788,7 @@ if NUMBA_AVAIL:
         return out
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
-    def _nb_kernel_precomputed_sparse(
-        x_arr,
-        ref_arr,
-        anat_weights,
-        mask_indices,
-        norm_arr,
-        n,
-        sigma_emission,
-        normalize,
-        hybrid,
-    ):
-        """
-        Forward kernel using pre-computed anatomical weights (sparse version with mask).
-        Only iterates over k masked neighbors per voxel.
-        anat_weights: shape (s0, s1, s2, k)
-        mask_indices: shape (s0, s1, s2, k) with integer indices in [0, n³)
-        """
-        s0, s1, s2 = x_arr.shape
-        half = n // 2
-        k = anat_weights.shape[3]
-        sig2_em = 2.0 * sigma_emission * sigma_emission
-
-        out = np.empty_like(x_arr, dtype=np.float64)
-
-        for i in numba.prange(s0):
-            for j in range(s1):
-                for k_vox in range(s2):
-                    c_ref = ref_arr[i, j, k_vox]
-                    sumv = 0.0
-                    wsum = 0.0
-
-                    # Iterate only over k valid neighbors
-                    for k_idx in range(k):
-                        flat_idx = mask_indices[i, j, k_vox, k_idx]
-
-                        # Convert flat index to (di, dj, dk) offset
-                        dk = (flat_idx % n) - half
-                        dj = ((flat_idx // n) % n) - half
-                        di = (flat_idx // (n * n)) - half
-
-                        # Apply boundary conditions
-                        ii = i + di
-                        if ii < 0:
-                            ii = -ii - 1
-                        elif ii >= s0:
-                            ii = 2 * s0 - ii - 1
-                        jj = j + dj
-                        if jj < 0:
-                            jj = -jj - 1
-                        elif jj >= s1:
-                            jj = 2 * s1 - jj - 1
-                        kk = k_vox + dk
-                        if kk < 0:
-                            kk = -kk - 1
-                        elif kk >= s2:
-                            kk = 2 * s2 - kk - 1
-
-                        # Get pre-computed anatomical weight
-                        w = anat_weights[i, j, k_vox, k_idx]
-
-                        # Apply emission weight if hybrid
-                        if hybrid and w > 0.0:
-                            diff_em = ref_arr[ii, jj, kk] - c_ref
-                            wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                            w *= wi_em
-
-                        sumv += x_arr[ii, jj, kk] * w
-                        wsum += w
-
-                    if normalize:
-                        if wsum > 1e-12:
-                            sumv /= wsum
-                            norm_arr[i, j, k_vox] = wsum
-                        else:
-                            norm_arr[i, j, k_vox] = 1.0
-                    out[i, j, k_vox] = sumv
-
-        return out
-
-
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True, parallel=True)
     def _nb_adjoint_precomputed(
         x_arr,
         ref_arr,
@@ -951,7 +799,7 @@ if NUMBA_AVAIL:
         hybrid,
     ):
         """
-        Adjoint kernel using pre-computed anatomical weights (dense version, no mask).
+        Adjoint kernel using pre-computed anatomical weights.
         Only calculates emission weights (if hybrid) and applies to data.
         """
         s0, s1, s2 = x_arr.shape
@@ -1000,79 +848,6 @@ if NUMBA_AVAIL:
 
                                 out[ii, jj, kk] += val * w
                                 idx += 1
-
-        return out
-
-
-    @numba.njit(cache=True, parallel=True, fastmath=True)
-    def _nb_adjoint_precomputed_sparse(
-        x_arr,
-        ref_arr,
-        anat_weights,
-        mask_indices,
-        norm_arr,
-        n,
-        sigma_emission,
-        hybrid,
-    ):
-        """
-        Adjoint kernel using pre-computed anatomical weights (sparse version with mask).
-        Only iterates over k masked neighbors per voxel.
-        anat_weights: shape (s0, s1, s2, k)
-        mask_indices: shape (s0, s1, s2, k) with integer indices in [0, n³)
-        """
-        s0, s1, s2 = x_arr.shape
-        half = n // 2
-        k = anat_weights.shape[3]
-        sig2_em = 2.0 * sigma_emission * sigma_emission
-
-        out = np.zeros_like(x_arr, dtype=np.float64)
-
-        for i in numba.prange(s0):
-            for j in range(s1):
-                for k_vox in range(s2):
-                    val = x_arr[i, j, k_vox]
-                    if norm_arr.shape[0] > 1:
-                        norm = norm_arr[i, j, k_vox]
-                        val = val / norm if norm > 1e-12 else 0.0
-                    c_ref = ref_arr[i, j, k_vox]
-
-                    # Iterate only over k valid neighbors
-                    for k_idx in range(k):
-                        flat_idx = mask_indices[i, j, k_vox, k_idx]
-
-                        # Convert flat index to (di, dj, dk) offset
-                        dk = (flat_idx % n) - half
-                        dj = ((flat_idx // n) % n) - half
-                        di = (flat_idx // (n * n)) - half
-
-                        # Apply boundary conditions
-                        ii = i + di
-                        if ii < 0:
-                            ii = -ii - 1
-                        elif ii >= s0:
-                            ii = 2 * s0 - ii - 1
-                        jj = j + dj
-                        if jj < 0:
-                            jj = -jj - 1
-                        elif jj >= s1:
-                            jj = 2 * s1 - jj - 1
-                        kk = k_vox + dk
-                        if kk < 0:
-                            kk = -kk - 1
-                        elif kk >= s2:
-                            kk = 2 * s2 - kk - 1
-
-                        # Get pre-computed anatomical weight
-                        w = anat_weights[i, j, k_vox, k_idx]
-
-                        # Apply emission weight if hybrid
-                        if hybrid and w > 0.0:
-                            diff_em = ref_arr[ii, jj, kk] - c_ref
-                            wi_em = np.exp(-(diff_em * diff_em) / sig2_em)
-                            w *= wi_em
-
-                        out[ii, jj, kk] += val * w
 
         return out
 

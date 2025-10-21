@@ -37,7 +37,6 @@ dependencies = [
 accelerators = [
     "numba>=0.55",
     "torch>=1.9",
-    "cupy>=9.0",
 ]
 dev = [
     "pytest>=7.0",

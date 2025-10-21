@@ -174,7 +174,7 @@ If you see warnings about backends:
 pip install numba
 
 # For GPU acceleration
-pip install torch cupy
+pip install torch
 ```
 
 ### "File not found" errors
@@ -224,7 +224,6 @@ ls data/spheres/
 - `numba`: Fast CPU (recommended if available)
 - `python`: Pure Python (slowest, always available)
 - `torch`: GPU acceleration (for blurring)
-- `cupy`: GPU acceleration (for blurring)
 
 ---
 

@@ -123,18 +123,18 @@ class RichardsonLucy(Algorithm):
             # Standard RL mode
             self.forward_operator = blurring_operator
 
-        # Compute sensitivity (normalization factor)
+        # Initialize estimated blur first (required before adjoint when using normalize_kernel=True)
+        if self.forward_operator is not None:
+            self.est_blur = self.forward_operator.direct(self.x)
+        else:
+            self.est_blur = self.x.clone()
+
+        # Compute sensitivity (normalization factor) after direct() call
         geometry = observed_data.geometry
         if self.forward_operator is not None:
             self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
         else:
             self.sensitivity = geometry.allocate(value=1)
-
-        # Initialize estimated blur
-        if self.forward_operator is not None:
-            self.est_blur = self.forward_operator.direct(self.x)
-        else:
-            self.est_blur = self.x.clone()
 
         self.configured = True
 

@@ -64,7 +64,39 @@ Results saved to `results/`
 
 ## GPU Acceleration
 
-The Docker container can use NVIDIA GPUs for significant performance improvements.
+KRL supports GPU acceleration for both blurring operators and kernel operators, enabling processing of large volumes (up to 256³) on consumer GPUs.
+
+### Kernel Operator GPU Support (New!)
+
+The kernel operator now supports PyTorch CUDA backend with automatic GPU detection:
+
+```python
+from krl.operators import get_kernel_operator
+
+# Automatic backend selection (prefers GPU)
+op = get_kernel_operator(geometry, backend='auto')
+
+# Force GPU with float32 for large volumes (256³)
+op = get_kernel_operator(geometry, backend='torch', dtype='float32',
+                         num_neighbours=5, mask_k=20)
+
+# Force CPU (Numba)
+op = get_kernel_operator(geometry, backend='numba')
+```
+
+**Memory Requirements for 256³ Volumes:**
+- Small config (n=5, k=20): **3.6 GB** → Fits RTX 3060 (12 GB)
+- Medium config (n=7, k=48): **8.8 GB** → Fits RTX 4090 (24 GB)
+- Use `dtype='float32'` to halve memory usage
+
+**Check GPU status:**
+```bash
+python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); print(f'GPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+```
+
+### Docker GPU Support
+
+The Docker container can use NVIDIA GPUs for blurring operations.
 
 **Automatic detection and fallback:**
 - `make start` checks for the `nvidia` Docker runtime.

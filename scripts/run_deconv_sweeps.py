@@ -105,6 +105,7 @@ DATASETS: Dict[str, Dict[str, object]] = {
             emission_file="MK-H001_PET_MNI.nii",
             guidance_file="MK-H001_T1_MNI.nii",
             backend="auto",
+            flip_guidance=True,
             do_rl=False,
             do_krl=False,
             do_drl=False,
@@ -157,10 +158,10 @@ PIPELINES: Dict[str, Dict[str, object]] = {
         },
         "kernel_overrides": {},
         "config_grid": {
-            "alpha": [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0],
+            "alpha": [0.1,0.2,0.28,0.3,0.4,0.5,1,2.0,5.0,10.0],
         },
         "kernel_grid": {},
-    },
+    }, 
     "krl": {
         "description": "Kernel expectation maximisation (KEM)",
         "config_overrides": {
@@ -173,18 +174,16 @@ PIPELINES: Dict[str, Dict[str, object]] = {
         "kernel_overrides": {
             "hybrid": False,
             "num_neighbours": 7,
-            "mask_k": 20,
+            "mask_k": 48,
             "sigma_dist": 10000,
             "distance_weighting": False,
             "normalize_features": True,
             "normalize_kernel": True,
             "use_mask": True,
         },
-        "config_grid": {
-            "freeze_iteration": [0, 5],
-        },
+        "config_grid": {},
         "kernel_grid": {
-            "sigma_anat": [0.1, 0.2, 0.5, 1.0, 2.0],
+            "sigma_anat": [0.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
         },
     },
     "hkrl": {
@@ -193,23 +192,25 @@ PIPELINES: Dict[str, Dict[str, object]] = {
             "do_krl": True,
             "do_rl": False,
             "do_drl": False,
-            "rl_iterations_kernel": 50,
-            "rl_iterations_standard": 50,
+            "rl_iterations_kernel": 100,
+            "rl_iterations_standard": 100,
         },
         "kernel_overrides": {
             "hybrid": True,
             "use_mask": True,
             "num_neighbours": 7,
-            "mask_k": 20,
+            "mask_k": 48,
             "sigma_dist": 10000,
             "distance_weighting": False,
             "normalize_features": True,
             "normalize_kernel": True,
         },
-        "config_grid": {},
+        "config_grid": {
+            "freeze_iteration": [1, 2],
+        },
         "kernel_grid": {
-            "sigma_anat": [0.1, 0.2, 0.5, 1.0, 2.0],
-            "sigma_emission": [0.1, 0.2, 0.5, 1.0, 2.0],
+            "sigma_anat": [10.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
+            "sigma_emission": [0.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
         },
     },
 }
@@ -260,16 +261,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--datasets",
         nargs="+",
-        choices=sorted(DATASETS.keys()),
-        default=sorted(DATASETS.keys()),
+        choices=list(DATASETS.keys()),
+        default=list(DATASETS.keys()),
         help="Datasets to include in the sweep.",
     )
     parser.add_argument(
         "--pipelines",
         nargs="+",
-        choices=sorted(PIPELINES.keys()),
-        default=sorted(PIPELINES.keys()),
-        help="Pipelines to include (dtv, krl, hkrl).",
+        choices=list(PIPELINES.keys()),
+        default=list(PIPELINES.keys()),
+        help="Pipelines to include (rl, dtv, krl, hkrl).",
     )
     parser.add_argument(
         "--max-runs",

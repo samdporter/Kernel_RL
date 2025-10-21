@@ -79,6 +79,10 @@ def load_images(config: PipelineConfig) -> Dict[str, ImageData]:
         arr = images["OSEM"].as_array()
         images["OSEM"].fill(np.flip(arr, axis=1))
 
+    if config.flip_guidance:
+        arr = images["T1"].as_array()
+        images["T1"].fill(np.flip(arr, axis=1))
+
     # Load ground truth if available
     if config.ground_truth_path() is not None:
         gt_path = config.ground_truth_path()
@@ -91,23 +95,24 @@ def load_images(config: PipelineConfig) -> Dict[str, ImageData]:
     return images
 
 
-def save_reference_figures(images: Mapping[str, ImageData], output_dir: Path) -> None:
+def save_reference_figures(images: Mapping[str, ImageData], output_dir: Path, osem_vmax: float) -> None:
     """Save reference comparison figures."""
+    t1_vmax = float(np.max(images["T1"].as_array()))
     fig = show2D(
         [images["OSEM"], images["T1"]],
         title=["OSEM", "T1"],
         origin="upper",
         num_cols=2,
-        fix_range=[(0, 10), (0, 5)],
+        fix_range=[(0, osem_vmax), (0, t1_vmax)],
     )
     fig.save(output_dir / "OSEM_T1.png")
 
     slices = [images["OSEM"].shape[0] // 4, 3 * images["OSEM"].shape[0] // 4]
     fig, ax = plt.subplots(len(slices), 2, figsize=(10, 5))
     for row, z in enumerate(slices):
-        ax[row, 0].imshow(images["OSEM"].as_array()[z], cmap="gray")
+        ax[row, 0].imshow(images["OSEM"].as_array()[z], cmap="gray", vmin=0, vmax=osem_vmax)
         ax[row, 0].set_title("OSEM")
-        ax[row, 1].imshow(images["T1"].as_array()[z], cmap="gray")
+        ax[row, 1].imshow(images["T1"].as_array()[z], cmap="gray", vmin=0, vmax=t1_vmax)
         ax[row, 1].set_title("T1")
     for axis in np.atleast_1d(ax).ravel():
         axis.axis("off")
@@ -156,6 +161,7 @@ def richardson_lucy(
     kernel_operator=None,
     save_dir: Path,
     save_interval: int = 10,
+    save_first_n: int = 5,
     tag: str = "",
     callbacks=None,
 ):
@@ -183,6 +189,8 @@ def richardson_lucy(
         Directory to save intermediate results
     save_interval : int, optional
         Save every N iterations
+    save_first_n : int, optional
+        Save first N iterations before using interval
     tag : str, optional
         Prefix for saved filenames
     callbacks : list, optional
@@ -205,6 +213,7 @@ def richardson_lucy(
             interval=save_interval,
             prefix=f"{tag}deconv_iter",
             kernel_operator=kernel_operator,
+            save_first_n=save_first_n,
         )
         all_callbacks.append(save_callback)
 
@@ -233,8 +242,29 @@ def richardson_lucy(
 
 
 def save_objective(values: Iterable[float], output: Path, title: str) -> None:
+    """Save objective values as both CSV and plot.
+
+    Parameters
+    ----------
+    values : Iterable[float]
+        Objective values per iteration
+    output : Path
+        Output path for the plot (CSV will have same name with .csv extension)
+    title : str
+        Plot title
+    """
+    values_list = list(values)
+
+    # Save as CSV
+    csv_path = output.with_suffix('.csv')
+    with open(csv_path, 'w') as f:
+        f.write("iteration,objective\n")
+        for i, val in enumerate(values_list, start=1):
+            f.write(f"{i},{val:.8e}\n")
+
+    # Save plot
     plt.figure()
-    plt.plot(list(values))
+    plt.plot(values_list)
     plt.xlabel("Iteration")
     plt.ylabel("Objective")
     plt.title(title)
@@ -296,7 +326,11 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
     output_dir.mkdir(parents=True, exist_ok=True)
 
     images = load_images(config)
-    save_reference_figures(images, output_dir)
+
+    # Calculate vmax from OSEM image for consistent scaling across all plots
+    osem_vmax = float(np.max(images["OSEM"].as_array()))
+
+    save_reference_figures(images, output_dir, osem_vmax)
     print(f"size of OSEM image: {images['OSEM'].shape}")
     print(f"size of T1 image: {images['T1'].shape}")
 
@@ -325,6 +359,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             iterations=config.rl_iterations_standard,
             freeze_iteration=config.freeze_iteration,
             save_dir=output_dir,
+            save_first_n=config.save_first_n,
             tag="rl_",
             callbacks=rl_callbacks if rl_callbacks else None,
         )
@@ -336,7 +371,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             images["OSEM"],
             output_dir / "deconv_rl_comparison.png",
             "Deconv RL",
-            ranges=[(0, 320), (0, 320)],
+            ranges=[(0, osem_vmax), (0, osem_vmax)],
         )
         save_objective(rl_obj, output_dir / "deconv_rl_objective.png", "RL Objective")
         save_image(rl_img, output_dir / "deconv_rl.nii.gz")
@@ -367,7 +402,9 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             blur,
             iterations=config.rl_iterations_kernel,
             kernel_operator=kernel_operator,
+            freeze_iteration=config.freeze_iteration if kernel_params.hybrid else 0,
             save_dir=output_dir,
+            save_first_n=config.save_first_n,
             tag="kernel_",
             callbacks=krl_callbacks if krl_callbacks else None,
         )
@@ -380,7 +417,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             images["OSEM"],
             output_dir / "deconv_kernel_comparison.png",
             "Deconv KRL",
-            ranges=[(0, 320), (0, 320)],
+            ranges=[(0, osem_vmax), (0, osem_vmax)],
         )
         save_objective(
             kernel_obj, output_dir / "deconv_kernel_objective.png", "KRL Objective"
@@ -410,20 +447,32 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
         )
 
         class SaveCallback(Callback):
-            def __init__(self, interval: int) -> None:
+            def __init__(self, interval: int, save_first_n: int = 5) -> None:
                 super().__init__()
                 self.interval = interval
+                self.save_first_n = save_first_n
 
             def __call__(self, algorithm: alg.Algorithm) -> None:  # type: ignore[override]
-                if algorithm.iteration % self.interval == 0:
-                    with np.errstate(invalid="ignore"):
-                        algorithm.solution.maximum(0, out=algorithm.solution)
-                    save_image(
-                        algorithm.solution,
-                        output_dir / f"dtv_iter_{algorithm.iteration}.nii.gz"
-                    )
+                # Save first N iterations (1, 2, 3, 4, 5)
+                if algorithm.iteration <= self.save_first_n:
+                    should_save = True
+                # Then save at regular intervals (10, 20, 30...)
+                elif algorithm.iteration % self.interval == 0:
+                    should_save = True
+                else:
+                    should_save = False
 
-        dtv_callbacks = [SaveCallback(10)]
+                if not should_save:
+                    return
+
+                with np.errstate(invalid="ignore"):
+                    algorithm.solution.maximum(0, out=algorithm.solution)
+                save_image(
+                    algorithm.solution,
+                    output_dir / f"dtv_iter_{algorithm.iteration}.nii.gz"
+                )
+
+        dtv_callbacks = [SaveCallback(10, save_first_n=config.save_first_n)]
         if ground_truth is not None:
             dtv_callbacks.append(
                 NRMSECallback(
@@ -456,7 +505,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             images["OSEM"],
             output_dir / "deconv_dtv_comparison.png",
             "Deconv DTV",
-            ranges=[(0, 320), (0, 320)],
+            ranges=[(0, osem_vmax), (0, osem_vmax)],
         )
         save_objective(
             maprl.objective,

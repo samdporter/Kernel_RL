@@ -125,6 +125,8 @@ class SaveIterationCallback(Callback):
         Prefix for saved filenames (default: "iter")
     kernel_operator : LinearOperator, optional
         If provided, apply this operator to the solution before saving
+    save_first_n : int, optional
+        Save the first N iterations (default: 5)
     """
 
     def __init__(
@@ -133,19 +135,30 @@ class SaveIterationCallback(Callback):
         interval: int = 10,
         prefix: str = "iter",
         kernel_operator=None,
+        save_first_n: int = 5,
     ):
         super().__init__()
         self.output_dir = Path(output_dir)
         self.interval = interval
         self.prefix = prefix
         self.kernel_operator = kernel_operator
+        self.save_first_n = save_first_n
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def __call__(self, algorithm: Algorithm) -> None:
         """Save current solution at specified intervals."""
-        if algorithm.iteration % self.interval != 0:
+        # Save first N iterations (1, 2, 3, 4, 5)
+        if algorithm.iteration <= self.save_first_n:
+            should_save = True
+        # Then save at regular intervals (10, 20, 30...)
+        elif algorithm.iteration % self.interval == 0:
+            should_save = True
+        else:
+            should_save = False
+
+        if not should_save:
             return
 
         from krl.utils import save_image

@@ -48,7 +48,7 @@ KRL/
 #### Added Files:
 - **`pyproject.toml`** - Modern Python packaging configuration (PEP 518/517)
 - **`requirements.txt`** - Core dependencies
-- **`requirements-optional.txt`** - Optional accelerators (numba, torch, cupy)
+- **`requirements-optional.txt`** - Optional accelerators (numba, torch)
 - **`requirements-dev.txt`** - Development tools
 
 #### Installation Methods:

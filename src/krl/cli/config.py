@@ -60,6 +60,7 @@ class PipelineConfig:
     backend: str = "numba"
     show_plots: bool = False
     flip_emission: bool = False
+    flip_guidance: bool = False
     do_rl: bool = True
     do_krl: bool = True
     do_drl: bool = True
@@ -77,6 +78,7 @@ class PipelineConfig:
     update_obj_interval: int = 1
     psf_kernel_size: int = 5
     fwhm: Tuple[float, float, float] = (6.0, 6.0, 6.0)
+    save_first_n: int = 5
 
     def emission_path(self) -> Path:
         return self.data_path / self.emission_file
@@ -117,6 +119,7 @@ class PipelineConfig:
         yield f"  backend: {self.backend}"
         yield f"  show_plots: {self.show_plots}"
         yield f"  flip_emission: {self.flip_emission}"
+        yield f"  flip_guidance: {self.flip_guidance}"
         yield f"  run RL: {self.do_rl}"
         yield f"  run KRL: {self.do_krl}"
         yield f"  run DRL: {self.do_drl}"
@@ -163,6 +166,7 @@ def parse_common_args(
     parser.add_argument("--save-suffix", default=defaults.save_suffix)
     parser.add_argument("--fwhm", type=float, nargs=3, default=list(defaults.fwhm), metavar=("FX", "FY", "FZ"))
     parser.add_argument("--psf-kernel-size", type=int, default=defaults.psf_kernel_size)
+    parser.add_argument("--save-first-n", type=int, default=defaults.save_first_n, help="Save first N iterations before using interval")
 
     parser.add_argument("--noise-seed", type=int, default=defaults.noise_seed)
     parser.add_argument("--bw-seed", type=int, default=defaults.bw_seed)
@@ -180,6 +184,8 @@ def parse_common_args(
     parser.add_argument("--no-show-plots", dest="show_plots", action="store_false")
     parser.add_argument("--flip-emission", dest="flip_emission", action="store_true", default=defaults.flip_emission)
     parser.add_argument("--no-flip-emission", dest="flip_emission", action="store_false")
+    parser.add_argument("--flip-guidance", dest="flip_guidance", action="store_true", default=defaults.flip_guidance)
+    parser.add_argument("--no-flip-guidance", dest="flip_guidance", action="store_false")
 
     parser.add_argument("--enable-rl", dest="do_rl", action="store_true", default=defaults.do_rl)
     parser.add_argument("--disable-rl", dest="do_rl", action="store_false")
@@ -221,6 +227,7 @@ def parse_common_args(
         backend=args.backend,
         show_plots=args.show_plots,
         flip_emission=args.flip_emission,
+        flip_guidance=args.flip_guidance,
         do_rl=args.do_rl,
         do_krl=args.do_krl,
         do_drl=args.do_drl,
@@ -237,6 +244,7 @@ def parse_common_args(
         update_obj_interval=getattr(args, "update_obj_interval", defaults.update_obj_interval),
         psf_kernel_size=args.psf_kernel_size,
         fwhm=_tuple3(args.fwhm),
+        save_first_n=args.save_first_n,
     )
 
     kernel = KernelParameters(
