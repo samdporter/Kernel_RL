@@ -44,12 +44,16 @@ python run_deconv.py \
 
 ## Hybrid KRL (HKRL)
 
-KRL that combines emission and anatomical features.
+KRL that combines emission and anatomical features with kernel freezing for convergence.
 
 **How it works:**
 - Weights kernels using both PET emission and anatomical image
 - Adapts to cases where anatomy doesn't perfectly match emission
 - More flexible than pure KRL
+- **Freezes the emission reference after a specified iteration** to ensure convergence
+  - Before freezing: Kernel adapts to current emission estimate
+  - After freezing: Kernel becomes constant, enabling objective function convergence
+  - Sensitivity is automatically recomputed each iteration until freezing
 
 **When to use:** When emission and anatomy have partial mismatch.
 
@@ -57,8 +61,21 @@ KRL that combines emission and anatomical features.
 python run_deconv.py \
   --enable-krl \
   --kernel-hybrid \
-  --kernel-sigma-emission 1.0
+  --kernel-sigma-emission 1.0 \
+  --freeze-iteration 2
 ```
+
+**Key parameters:**
+- `--kernel-sigma-emission`: Emission sensitivity (how much to weight emission features)
+- `--freeze-iteration`: Iteration at which to freeze the emission kernel (default: 0, no freezing)
+  - Setting to 1-2 is recommended for convergence
+  - After this iteration, the kernel operator becomes constant
+
+**Important notes:**
+- HKRL requires `--freeze-iteration > 0` for proper convergence
+- Without freezing, the kernel keeps changing, preventing the objective from converging
+- The frozen reference is set at the END of the freeze iteration
+- Both forward and adjoint operations use the same frozen reference for consistency
 
 ---
 

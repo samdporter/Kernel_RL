@@ -10,8 +10,9 @@ import sys
 class DummyImage:
     __array_priority__ = 1000
 
-    def __init__(self, data):
+    def __init__(self, data, geometry=None):
         self.array = np.array(data, dtype=np.float64)
+        self.geometry = geometry
 
     def as_array(self):
         return self.array
@@ -21,7 +22,7 @@ class DummyImage:
         return self.array.ndim
 
     def clone(self):
-        return DummyImage(self.array.copy())
+        return DummyImage(self.array.copy(), geometry=self.geometry)
 
     def fill(self, values):
         if np.isscalar(values):
@@ -221,19 +222,19 @@ def _backward_neumann_diff(data, axis):
 
 @pytest.fixture
 def directional_module():
-    module = importlib.import_module("src.directional_operator")
+    module = importlib.import_module("src.krl.operators.directional")
     return importlib.reload(module)
 
 
 @pytest.fixture
 def gaussian_module():
-    module = importlib.import_module("src.gaussian_blurring")
+    module = importlib.import_module("src.krl.operators.blurring")
     return importlib.reload(module)
 
 
 @pytest.fixture
 def maprl_module():
-    module = importlib.import_module("src.map_rl")
+    module = importlib.import_module("src.krl.algorithms.maprl")
     return importlib.reload(module)
 
 
@@ -361,15 +362,36 @@ def test_maprl_step_size_schedule(maprl_module):
         def __call__(self, x):
             return 0.0
 
+    # Test with armijo_iterations=0 to disable Armijo search during iterations
     maprl = maprl_module.MAPRL(
         initial_estimate=img,
         data_fidelity=ZeroFunctional(),
         prior=ZeroFunctional(),
         step_size=2.0,
         relaxation_eta=0.5,
+        initial_line_search=False,
+        armijo_iterations=0,
     )
     maprl.iteration = 3
     assert maprl.step_size() == pytest.approx(2.0 / (1 + 0.5 * 3))
+
+    # Test within Armijo iterations window
+    maprl2 = maprl_module.MAPRL(
+        initial_estimate=img,
+        data_fidelity=ZeroFunctional(),
+        prior=ZeroFunctional(),
+        step_size=2.0,
+        relaxation_eta=0.5,
+        initial_line_search=False,
+        armijo_iterations=5,
+    )
+    maprl2.iteration = 3
+    # Within armijo_iterations window, it should use _current_step_size
+    assert maprl2.step_size() == pytest.approx(2.0)
+
+    # After armijo_iterations window, it should use relaxation formula
+    maprl2.iteration = 6
+    assert maprl2.step_size() == pytest.approx(2.0 / (1 + 0.5 * 6))
 
 
 def test_maprl_update_applies_scaled_gradient_and_projection(maprl_module):
@@ -394,6 +416,7 @@ def test_maprl_update_applies_scaled_gradient_and_projection(maprl_module):
         step_size=0.5,
         relaxation_eta=0.0,
         eps=0.0,
+        initial_line_search=False,
     )
 
     maprl.update()
@@ -408,3 +431,138 @@ def test_maprl_update_applies_scaled_gradient_and_projection(maprl_module):
     assert maprl.loss[0] == pytest.approx(
         maprl.data_fidelity(maprl.x) + maprl.prior(maprl.x)
     )
+
+
+def test_maprl_initial_line_search_reduces_objective(maprl_module):
+    target = DummyImage(np.full((2, 2), 2.0))
+
+    class QuadraticFunctional:
+        def gradient(self, x):
+            return x - target
+
+        def __call__(self, x):
+            diff = x.as_array() - target.as_array()
+            return 0.5 * float(np.sum(diff**2))
+
+    zero_prior = QuadraticFunctional()
+    zero_prior.gradient = lambda x: DummyImage(np.zeros_like(x.as_array()))
+
+    initial = DummyImage(np.ones((2, 2)))
+    step_guess = 10.0
+    maprl = maprl_module.MAPRL(
+        initial_estimate=initial,
+        data_fidelity=QuadraticFunctional(),
+        prior=zero_prior,
+        step_size=step_guess,
+        relaxation_eta=0.0,
+        eps=0.0,
+        initial_line_search=True,
+        armijo_beta=0.5,
+        armijo_sigma=1e-4,
+    )
+
+    assert maprl.initial_step_size <= step_guess
+
+    grad = maprl.data_fidelity.gradient(initial) + maprl.prior.gradient(initial)
+    direction = (initial + maprl.eps) * grad
+    slope = maprl_module.MAPRL._inner_product(direction, grad)
+    candidate = initial - direction * maprl.initial_step_size
+    candidate.maximum(0, out=candidate)
+
+    initial_loss = maprl.data_fidelity(initial) + maprl.prior(initial)
+    candidate_loss = maprl.data_fidelity(candidate) + maprl.prior(candidate)
+
+    assert candidate_loss <= initial_loss - maprl.armijo_sigma * maprl.initial_step_size * slope + 1e-8
+
+
+def test_maprl_armijo_iterations_perform_line_search(maprl_module):
+    """Test that Armijo line search is performed for the first armijo_iterations."""
+    target = DummyImage(np.full((2, 2), 2.0))
+
+    class QuadraticFunctional:
+        def __init__(self):
+            self.gradient_calls = 0
+            self.eval_calls = 0
+
+        def gradient(self, x):
+            self.gradient_calls += 1
+            return x - target
+
+        def __call__(self, x):
+            self.eval_calls += 1
+            diff = x.as_array() - target.as_array()
+            return 0.5 * float(np.sum(diff**2))
+
+    data_fidelity = QuadraticFunctional()
+    zero_prior = QuadraticFunctional()
+    zero_prior.gradient = lambda x: DummyImage(np.zeros_like(x.as_array()))
+    zero_prior.__call__ = lambda x: 0.0
+
+    initial = DummyImage(np.ones((2, 2)))
+
+    # Test with armijo_iterations=3 to verify line search happens in first 3 iterations
+    maprl = maprl_module.MAPRL(
+        initial_estimate=initial,
+        data_fidelity=data_fidelity,
+        prior=zero_prior,
+        step_size=10.0,  # Intentionally large to trigger backtracking
+        relaxation_eta=0.1,
+        eps=0.0,
+        initial_line_search=True,
+        armijo_beta=0.5,
+        armijo_sigma=1e-4,
+        armijo_max_iter=20,
+        armijo_iterations=3,  # Only first 3 iterations use Armijo
+    )
+
+    initial_step = maprl.initial_step_size
+    losses = []
+    step_sizes = []
+
+    # Run 6 iterations
+    for i in range(1, 7):
+        maprl.iteration = i
+        eval_calls_before = data_fidelity.eval_calls
+
+        maprl.update()
+        step_after = maprl.step_size()
+
+        maprl.update_objective()
+        losses.append(maprl.loss[-1])
+        step_sizes.append(step_after)
+
+        eval_calls_after = data_fidelity.eval_calls
+
+        if i <= 3:
+            # During Armijo iterations, we expect multiple evaluations (line search)
+            # At minimum: reference loss + at least one candidate
+            assert eval_calls_after - eval_calls_before >= 2, \
+                f"Iteration {i}: Expected multiple loss evaluations during Armijo search, got {eval_calls_after - eval_calls_before}"
+            # Step size should be found by Armijo (likely smaller than initial_step)
+            # and should stay constant within the Armijo window
+            assert step_after == maprl._current_step_size
+        else:
+            # After Armijo iterations, only one evaluation for update_objective
+            assert eval_calls_after - eval_calls_before == 1, \
+                f"Iteration {i}: Expected single evaluation, got {eval_calls_after - eval_calls_before}"
+            # Step size should follow relaxation schedule
+            expected_step = initial_step / (1 + 0.1 * i)
+            assert step_after == pytest.approx(expected_step)
+
+    # Verify that losses are decreasing (convergence)
+    for i in range(1, len(losses)):
+        assert losses[i] <= losses[i-1] + 1e-6, \
+            f"Loss increased from iteration {i} to {i+1}: {losses[i-1]:.6f} -> {losses[i]:.6f}"
+
+    # Verify step sizes behavior
+    # First 3 iterations use Armijo-found steps, which can vary per iteration
+    # but should be less than or equal to initial_step (due to backtracking)
+    for i in range(3):
+        assert step_sizes[i] <= initial_step, \
+            f"Armijo iteration {i+1}: step {step_sizes[i]:.6f} should be <= initial {initial_step:.6f}"
+
+    # Iterations 4-6 should follow relaxation schedule
+    for i in range(3, 6):
+        expected_step = initial_step / (1 + 0.1 * (i + 1))
+        assert step_sizes[i] == pytest.approx(expected_step), \
+            f"Iteration {i+1}: step {step_sizes[i]:.6f} should match relaxation schedule {expected_step:.6f}"

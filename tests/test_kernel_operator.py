@@ -5,7 +5,7 @@ from typing import Tuple
 import numpy as np
 import pytest
 
-from src.kernel_operator import (
+from src.krl.operators.kernel_operator import (
     DEFAULT_PARAMETERS,
     NUMBA_AVAIL,
     KernelOperator,

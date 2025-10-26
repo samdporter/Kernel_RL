@@ -22,7 +22,10 @@ from krl.operators.blurring import GaussianBlurringOperator, create_gaussian_blu
 from krl.operators.gradient import Gradient
 from krl.operators.directional import DirectionalOperator
 from krl.algorithms.maprl import MAPRL
-from krl.utils import get_array, load_image, save_image, load_nifti_as_imagedata
+from krl.utils import (
+    get_array, load_image, save_image, 
+    load_nifti_as_imagedata, prepare_brainweb_pet_dataset,
+)
 
 __all__ = [
     "__version__",
@@ -43,4 +46,5 @@ __all__ = [
     "load_image",
     "save_image",
     "load_nifti_as_imagedata",
+    "prepare_brainweb_pet_dataset",
 ]

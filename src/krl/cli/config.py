@@ -74,11 +74,17 @@ class PipelineConfig:
     dtv_iterations: int = 100
     alpha: float = 0.1
     step_size: float = 0.2
-    relaxation_eta: float = 0.01
+    relaxation_eta: float = 0.0
     update_obj_interval: int = 1
+    armijo_iterations: int = 1000
+    armijo_update_initial: int = 10
+    armijo_update_interval: int = 25
+    preconditioner_update_initial: int = 10
+    preconditioner_update_interval: int = 25
     psf_kernel_size: int = 5
     fwhm: Tuple[float, float, float] = (6.0, 6.0, 6.0)
     save_first_n: int = 5
+    use_uniform_initial: bool = False
 
     def emission_path(self) -> Path:
         return self.data_path / self.emission_file
@@ -108,6 +114,10 @@ class PipelineConfig:
                 f"_eta{self._fmt(self.relaxation_eta)}"
             )
         suffix = "_".join(parts) + f"_G{self._fmt(self.fwhm[0])}mm"
+        if self.use_uniform_initial:
+            suffix += "_init-uniform"
+        else:
+            suffix += "_init-blurred"
         return self.output_root / suffix
 
     def summary_lines(self, kernel: KernelParameters) -> Iterable[str]:
@@ -129,6 +139,7 @@ class PipelineConfig:
         yield f"  dtv_iterations: {self.dtv_iterations}"
         yield f"  psf_kernel_size: {self.psf_kernel_size}"
         yield f"  fwhm: {self.fwhm}"
+        yield f"  use_uniform_initial: {self.use_uniform_initial}"
         yield "Kernel parameters:"
         for key, value in kernel.as_operator_kwargs().items():
             yield f"  {key}: {value}"
@@ -167,6 +178,8 @@ def parse_common_args(
     parser.add_argument("--fwhm", type=float, nargs=3, default=list(defaults.fwhm), metavar=("FX", "FY", "FZ"))
     parser.add_argument("--psf-kernel-size", type=int, default=defaults.psf_kernel_size)
     parser.add_argument("--save-first-n", type=int, default=defaults.save_first_n, help="Save first N iterations before using interval")
+    parser.add_argument("--use-uniform-initial", dest="use_uniform_initial", action="store_true", default=defaults.use_uniform_initial, help="Use uniform image as initial estimate instead of blurred image")
+    parser.add_argument("--use-blurred-initial", dest="use_uniform_initial", action="store_false", help="Use blurred image as initial estimate (default)")
 
     parser.add_argument("--noise-seed", type=int, default=defaults.noise_seed)
     parser.add_argument("--bw-seed", type=int, default=defaults.bw_seed)
@@ -179,6 +192,11 @@ def parse_common_args(
         parser.add_argument("--step-size", type=float, default=defaults.step_size)
         parser.add_argument("--relaxation-eta", type=float, default=defaults.relaxation_eta)
         parser.add_argument("--update-obj-interval", type=int, default=defaults.update_obj_interval)
+        parser.add_argument("--armijo-iterations", type=int, default=defaults.armijo_iterations, help="Maximum iteration number for Armijo line search (0 = disabled)")
+        parser.add_argument("--armijo-update-initial", type=int, default=defaults.armijo_update_initial, help="Perform Armijo line search every iteration for first N iterations")
+        parser.add_argument("--armijo-update-interval", type=int, default=defaults.armijo_update_interval, help="Perform Armijo line search every N iterations after initial period")
+        parser.add_argument("--preconditioner-update-initial", type=int, default=defaults.preconditioner_update_initial, help="Update preconditioner every iteration for first N iterations")
+        parser.add_argument("--preconditioner-update-interval", type=int, default=defaults.preconditioner_update_interval, help="Update preconditioner every N iterations after initial period")
 
     parser.add_argument("--show-plots", dest="show_plots", action="store_true", default=defaults.show_plots)
     parser.add_argument("--no-show-plots", dest="show_plots", action="store_false")
@@ -242,9 +260,15 @@ def parse_common_args(
         step_size=getattr(args, "step_size", defaults.step_size),
         relaxation_eta=getattr(args, "relaxation_eta", defaults.relaxation_eta),
         update_obj_interval=getattr(args, "update_obj_interval", defaults.update_obj_interval),
+        armijo_iterations=getattr(args, "armijo_iterations", defaults.armijo_iterations),
+        armijo_update_initial=getattr(args, "armijo_update_initial", defaults.armijo_update_initial),
+        armijo_update_interval=getattr(args, "armijo_update_interval", defaults.armijo_update_interval),
+        preconditioner_update_initial=getattr(args, "preconditioner_update_initial", defaults.preconditioner_update_initial),
+        preconditioner_update_interval=getattr(args, "preconditioner_update_interval", defaults.preconditioner_update_interval),
         psf_kernel_size=args.psf_kernel_size,
         fwhm=_tuple3(args.fwhm),
         save_first_n=args.save_first_n,
+        use_uniform_initial=args.use_uniform_initial,
     )
 
     kernel = KernelParameters(

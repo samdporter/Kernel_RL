@@ -23,6 +23,8 @@ Run only the hybrid sweep on the spheres dataset::
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
 from dataclasses import replace
 from itertools import product
 from pathlib import Path
@@ -33,6 +35,31 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+ENV_FLAG = "KRL_ENV_BOOTSTRAPPED"
+EXPECTED_ENV = "krl"
+
+
+def _ensure_environment() -> None:
+    """Re-exec under `mamba run -n krl` if we are outside the expected env."""
+    current_env = os.environ.get("CONDA_DEFAULT_ENV") or os.environ.get("MAMBA_DEFAULT_ENV")
+    if current_env == EXPECTED_ENV or os.environ.get(ENV_FLAG) == "1":
+        return
+
+    mamba = shutil.which("mamba")
+    if mamba is None:
+        raise SystemExit(
+            "This script must be executed within the 'krl' conda environment.\n"
+            "Please run: mamba run -n krl python scripts/run_deconv_sweeps.py ..."
+        )
+
+    os.environ[ENV_FLAG] = "1"
+    script = Path(__file__).resolve()
+    cmd = [mamba, "run", "-n", EXPECTED_ENV, "python", str(script), *sys.argv[1:]]
+    os.execvpe(cmd[0], cmd, os.environ)
+
+
+_ensure_environment()
 
 from krl.cli.config import KernelParameters, PipelineConfig
 
@@ -67,68 +94,56 @@ def _slugify(config_updates: Mapping[str, object], kernel_updates: Mapping[str, 
 
 # Dataset specific defaults ----------------------------------------------------
 
-DATASETS: Dict[str, Dict[str, object]] = {
+DEFAULT_CONFIG = PipelineConfig(
+    backend="auto",
+    do_rl=False,
+    do_krl=False,
+    do_drl=False,
+    rl_iterations_standard=100,
+    rl_iterations_kernel=100,
+    dtv_iterations=1000,
+    step_size=1.0,
+    psf_kernel_size=5,
+    use_uniform_initial=True,
+)
+
+DEFAULT_KERNEL = KernelParameters(
+    num_neighbours=9,
+    sigma_anat=1.0,
+    sigma_dist=1.0,
+    sigma_emission=1.0,
+    distance_weighting=False,
+    normalize_features=True,
+    normalize_kernel=True,
+    use_mask=True,
+    mask_k=48,
+    recalc_mask=False,
+    hybrid=False,
+)
+
+DATASETS: Dict[str, Dict[str, Mapping[str, object]]] = {
     "spheres": {
-        "config": PipelineConfig(
-            data_path=Path("data/spheres"),
-            emission_file="phant_pet.nii",
-            guidance_file="phant_mri.nii",
-            ground_truth_file="phant_orig.nii",
-            backend="auto",
-            do_rl=False,
-            do_krl=False,
-            do_drl=False,
-            rl_iterations_standard=100,
-            rl_iterations_kernel=100,
-            dtv_iterations=100,
-            fwhm=(5.5, 5.5, 5.5),
-            psf_kernel_size=5,
-            save_suffix="spheres",
-        ),
-        "kernel": KernelParameters(
-            num_neighbours=5,
-            sigma_anat=0.35,
-            sigma_dist=0.6,
-            sigma_emission=0.8,
-            distance_weighting=False,
-            normalize_features=True,
-            normalize_kernel=True,
-            use_mask=True,
-            mask_k=48,
-            recalc_mask=False,
-            hybrid=False,
-        ),
+        "config_overrides": {
+            "data_path": Path("data/spheres"),
+            "emission_file": "phant_pet.nii",
+            "guidance_file": "phant_mri.nii",
+            "ground_truth_file": "phant_orig.nii",
+            "fwhm": (5.5, 5.5, 5.5),
+            "save_suffix": "spheres",
+        },
+        "kernel_overrides": {},
     },
     "mk-h001": {
-        "config": PipelineConfig(
-            data_path=Path("data/MK-H001"),
-            emission_file="MK-H001_PET_MNI.nii",
-            guidance_file="MK-H001_T1_MNI.nii",
-            backend="auto",
-            flip_guidance=True,
-            do_rl=False,
-            do_krl=False,
-            do_drl=False,
-            rl_iterations_standard=80,
-            rl_iterations_kernel=120,
-            dtv_iterations=120,
-            fwhm=(6.0, 6.0, 6.0),
-            psf_kernel_size=7,
-            save_suffix="mk_h001",
-        ),
-        "kernel": KernelParameters(
-            num_neighbours=7,
-            sigma_anat=0.45,
-            sigma_dist=1.0,
-            sigma_emission=1.2,
-            distance_weighting=True,
-            normalize_features=True,
-            normalize_kernel=True,
-            use_mask=True,
-            mask_k=64,
-            recalc_mask=False,
-            hybrid=False,
-        ),
+        "config_overrides": {
+            "data_path": Path("data/MK-H001"),
+            "emission_file": "MK-H001_PET_MNI.nii",
+            "guidance_file": "MK-H001_T1_MNI.nii",
+            "fwhm": (6.0, 6.0, 6.0),
+            "flip_guidance": False,
+            "save_suffix": "mk_h001",
+        },
+        "kernel_overrides": {
+        },
     },
 }
 
@@ -142,10 +157,12 @@ PIPELINES: Dict[str, Dict[str, object]] = {
             "do_rl": True,
             "do_krl": False,
             "do_drl": False,
-            "rl_iterations_standard": 100,
         },
         "kernel_overrides": {},
-        "config_grid": {},
+        "config_grid": {
+            # Example: uncomment to sweep over initial image types
+            "use_uniform_initial": [True], 
+        },
         "kernel_grid": {},
     },
     "dtv": {
@@ -154,11 +171,12 @@ PIPELINES: Dict[str, Dict[str, object]] = {
             "do_drl": True,
             "do_rl": False,
             "do_krl": False,
-            "dtv_iterations": 100,
         },
         "kernel_overrides": {},
         "config_grid": {
-            "alpha": [0.1,0.2,0.28,0.3,0.4,0.5,1,2.0,5.0,10.0],
+            "alpha": [0.5,1,2.0,5.0],
+            # Example: uncomment to sweep over initial image types
+            "use_uniform_initial": [False], 
         },
         "kernel_grid": {},
     }, 
@@ -168,22 +186,15 @@ PIPELINES: Dict[str, Dict[str, object]] = {
             "do_krl": True,
             "do_rl": False,
             "do_drl": False,
-            "rl_iterations_kernel": 100,
-            "rl_iterations_standard": 100,
         },
         "kernel_overrides": {
-            "hybrid": False,
-            "num_neighbours": 7,
-            "mask_k": 48,
-            "sigma_dist": 10000,
-            "distance_weighting": False,
-            "normalize_features": True,
-            "normalize_kernel": True,
-            "use_mask": True,
         },
-        "config_grid": {},
+        "config_grid": {
+            # Example: uncomment to sweep over initial image types
+            "use_uniform_initial": [True], 
+        },
         "kernel_grid": {
-            "sigma_anat": [0.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
+            "sigma_anat": [0.1,0.2,0.5,1.0,2.0,5.0],
         },
     },
     "hkrl": {
@@ -192,25 +203,18 @@ PIPELINES: Dict[str, Dict[str, object]] = {
             "do_krl": True,
             "do_rl": False,
             "do_drl": False,
-            "rl_iterations_kernel": 100,
-            "rl_iterations_standard": 100,
         },
         "kernel_overrides": {
             "hybrid": True,
-            "use_mask": True,
-            "num_neighbours": 7,
-            "mask_k": 48,
-            "sigma_dist": 10000,
-            "distance_weighting": False,
-            "normalize_features": True,
-            "normalize_kernel": True,
         },
         "config_grid": {
-            "freeze_iteration": [1, 2],
+            "freeze_iteration": [5, 10],
+            # Example: uncomment to sweep over initial image types
+            "use_uniform_initial": [True], 
         },
         "kernel_grid": {
-            "sigma_anat": [10.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
-            "sigma_emission": [0.1,0.2,0.5,1.0, 2.0, 5.0, 10.0, 20.0],
+            "sigma_anat": [0.1,0.2,0.5,1.0,2.0,5.0],
+            "sigma_emission": [0.1,0.2,0.5,1.0,2.0,5.0],
         },
     },
 }
@@ -224,8 +228,11 @@ def build_runs(
 
     for dataset in datasets:
         ds = DATASETS[dataset]
-        base_config: PipelineConfig = ds["config"]
-        base_kernel: KernelParameters = ds["kernel"]
+        dataset_config_overrides = ds["config_overrides"]
+        dataset_kernel_overrides = ds["kernel_overrides"]
+
+        base_config: PipelineConfig = replace(DEFAULT_CONFIG, **dataset_config_overrides)
+        base_kernel: KernelParameters = replace(DEFAULT_KERNEL, **dataset_kernel_overrides)
 
         for pipeline in pipelines:
             spec = PIPELINES[pipeline]

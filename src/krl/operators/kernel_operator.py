@@ -207,9 +207,14 @@ class BaseKernelOperator(LinearOperator):
         if not self.parameters["hybrid"]:
             return emission_array
 
-        if self.freeze_emission_kernel and self.frozen_emission_kernel is not None:
+        # If frozen, always return the frozen reference (don't update)
+        if self.freeze_emission_kernel:
+            if self.frozen_emission_kernel is None:
+                # First call after freezing: initialize and freeze
+                self.frozen_emission_kernel = np.array(emission_array, copy=True)
             return self.frozen_emission_kernel
 
+        # Not frozen: update the reference
         if emission_array is None:
             raise ValueError("Hybrid emission reference requires an emission array.")
 

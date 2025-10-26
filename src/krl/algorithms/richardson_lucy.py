@@ -160,16 +160,33 @@ class RichardsonLucy(Algorithm):
         with np.errstate(invalid="ignore"):
             self.x.maximum(0, out=self.x)
 
-        # Update estimated blur
+        # Update estimated blur for next iteration
         self.est_blur = self.forward_operator.direct(self.x)
 
-        # Handle freezing for kernel operators
+        # For hybrid kernels, sensitivity must be recomputed each iteration until freezing
+        # because the kernel operator changes with the emission reference
+        if (
+            self.kernel_operator is not None
+            and getattr(self.kernel_operator, 'parameters', {}).get('hybrid', False)
+            and not getattr(self.kernel_operator, 'freeze_emission_kernel', False)
+        ):
+            # Recompute sensitivity for changing hybrid kernel
+            geometry = self.observed_data.geometry
+            self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
+
+        # Handle freezing AFTER the iteration completes
+        # Note: self.iteration is incremented AFTER this method returns (in CIL's __next__)
+        # So when self.iteration == freeze_iteration, this is the freeze iteration itself
+        # We freeze AFTER this iteration, so that iteration+1 uses this iteration's emission state
         if (
             self.freeze_iteration > 0
             and self.iteration == self.freeze_iteration
             and self.kernel_operator is not None
         ):
             self.kernel_operator.freeze_emission_kernel = True
+            # Recompute sensitivity one final time with frozen kernel
+            geometry = self.observed_data.geometry
+            self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
 
     def update_objective(self):
         """Compute and store the objective function (KL divergence)."""

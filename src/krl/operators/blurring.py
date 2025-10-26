@@ -39,7 +39,12 @@ class GaussianBlurringOperator(LinearOperator):
         if backend == 'auto':
             for b in ('torch', 'numba', 'scipy'):
                 try:
-                    __import__(b)
+                    if b == 'torch':
+                        import torch
+                        if not torch.cuda.is_available():
+                            continue  # Skip torch if CUDA not available
+                    else:
+                        __import__(b)
                     backend = b
                     break
                 except ImportError:
@@ -48,6 +53,11 @@ class GaussianBlurringOperator(LinearOperator):
         if backend == 'torch':
             import torch
             self.torch = torch
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "Torch backend selected but no CUDA GPUs available. "
+                    "Use backend='auto', 'numba', or 'scipy' instead."
+                )
             self.psf_t = torch.tensor(self.psf,
                                       dtype=torch.float32
                                     ).unsqueeze(0).unsqueeze(0).cuda()

@@ -303,6 +303,69 @@ class TestGPUForwardAdjoint:
         np.testing.assert_allclose(result_arr, expected, rtol=1e-4)
 
 
+class TestGPUAdjointCorrectness:
+    """Adjoint-specific correctness checks."""
+
+    @pytest.mark.parametrize("use_mask", [True, False])
+    def test_inner_product_matches_adjoint(
+        self, small_geometry, anatomical_gradient, use_mask
+    ):
+        """Check ⟨Ax, y⟩ equals ⟨x, Aᵀy⟩ for masked and dense modes."""
+        params = dict(
+            backend="torch",
+            device="cpu",
+            dtype="float32",
+            num_neighbours=5,
+            sigma_anat=0.2,
+            sigma_emission=0.1,
+            normalize_kernel=True,
+            use_mask=use_mask,
+        )
+        if use_mask:
+            params["mask_k"] = 20
+
+        op = get_kernel_operator(small_geometry, **params)
+        op.set_anatomical_image(anatomical_gradient)
+
+        rng = np.random.default_rng(123)
+        x_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+        y_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+
+        x_img = DummyImage(x_arr)
+        y_img = DummyImage(y_arr)
+
+        ax = op.direct(x_img)
+        lhs = float(np.vdot(ax.as_array().ravel(), y_arr.ravel()))
+
+        adj_y = op.adjoint(y_img)
+        rhs = float(np.vdot(x_arr.ravel(), adj_y.as_array().ravel()))
+
+        denom = max(abs(lhs), abs(rhs), 1.0)
+        assert abs(lhs - rhs) / denom < 5e-4
+
+    def test_normalisation_map_precision(self, small_geometry, anatomical_gradient):
+        """Normalization map should preserve forward precision (no float16 downcast)."""
+        op = get_kernel_operator(
+            small_geometry,
+            backend="torch",
+            device="cpu",
+            dtype="float32",
+            num_neighbours=5,
+            mask_k=20,
+            use_mask=True,
+            normalize_kernel=True,
+            sigma_anat=0.2,
+            sigma_emission=0.1,
+        )
+        op.set_anatomical_image(anatomical_gradient)
+
+        img = small_geometry.allocate(1.0)
+        _ = op.direct(img)
+
+        assert op._normalisation_map is not None
+        assert op._normalisation_map.dtype == np.float32
+
+
 @pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
 class TestGPUvsCPUConsistency:
     """Test GPU results match CPU results."""
