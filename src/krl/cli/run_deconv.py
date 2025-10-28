@@ -34,7 +34,7 @@ from krl.cli.config import (
 )
 from krl.operators.directional import DirectionalOperator
 from krl.operators.blurring import create_gaussian_blur
-from krl.algorithms.maprl import MAPRL
+from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
 from krl.algorithms.richardson_lucy import RichardsonLucy
 from krl.operators.kernel_operator import get_kernel_operator
 from krl.utils import load_image, save_image
@@ -452,7 +452,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
     if config.do_drl:
         f = fn.KullbackLeibler(
             b=images["OSEM"],
-            eta=images["OSEM"].geometry.allocate(value=1e-6),
+            eta=images["OSEM"].geometry.allocate(value=1e-2),
         )
         df = fn.OperatorCompositionFunction(f, blur)
         grad = GradientOperator(images["OSEM"].geometry, method="forward", bnd_cond="Neumann")
@@ -461,111 +461,6 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
         prior = config.alpha * fn.OperatorCompositionFunction(
             fn.SmoothMixedL21Norm(epsilon=images["OSEM"].max() * 1e-2), d_op
         )
-
-        # Monkey-patch diagonal_hessian_approx methods for preconditioner
-        # Structure: prior = ScaledFunction(scalar=alpha, function=OperatorCompositionFunction)
-        #           OperatorCompositionFunction.function = SmoothMixedL21Norm
-        #           OperatorCompositionFunction.operator = d_op
-
-        smooth_l21_func = prior.function.function  # The SmoothMixedL21Norm instance
-        composition_func = prior.function  # The OperatorCompositionFunction instance
-        epsilon_smooth = smooth_l21_func.epsilon
-
-        # Level 1: SmoothMixedL21Norm diagonal Hessian approximation
-        # For φ(y) = sqrt(||y||² + ε²) where y is a BlockDataContainer
-        # Diagonal Hessian w.r.t. each component ≈ ε² / (||y||² + ε²)^(3/2)
-        def smooth_l21_diag_hess(y):
-            # y is BlockDataContainer from operator output (directional gradients)
-            # Compute norm squared per voxel
-            norm_sq_arr = sum(c.as_array()**2 for c in y.containers)
-            denom = (norm_sq_arr + epsilon_smooth**2)**(1.5)
-
-            # Diagonal approximation: ε² / denom
-            diag_arr = epsilon_smooth**2 / (denom + 1e-12)
-
-            # Return as ImageData
-            result = y.containers[0].clone()
-            result.fill(diag_arr)
-            return result
-
-        # Level 2: OperatorCompositionFunction diagonal Hessian
-        # For F(x) = f(A(x)), diagonal Hessian ≈ A^T diag(Hess_f(A(x))) A
-        # Simplified diagonal approximation: return weighted scalar field
-        def composition_diag_hess(x):
-            # Apply operator to get y = A(x)
-            y = composition_func.operator.direct(x)
-            # Get diagonal of base function Hessian at y
-            # This gives us a scalar field representing the local curvature
-            base_diag = smooth_l21_func.diagonal_hessian_approx(y)
-            # For full A^T diag(Hess) A, we'd need to weight by operator magnitude
-            # As approximation, return base_diag which captures prior strength
-            return base_diag
-
-        # Level 3: ScaledFunction wrapper
-        def scaled_diag_hess(x):
-            return prior.scalar * prior.function.diagonal_hessian_approx(x)
-
-        # Attach the methods
-        smooth_l21_func.diagonal_hessian_approx = smooth_l21_diag_hess
-        composition_func.diagonal_hessian_approx = composition_diag_hess
-        prior.diagonal_hessian_approx = scaled_diag_hess
-
-        # Create preconditioner function for combining data/prior curvature
-        def compute_preconditioner(x, mean='harmonic'):
-            # MAPRL multiplies the gradient by the preconditioner image, so the
-            # function must return a diagonal approximation of the inverse
-            # curvature (H^{-1}).  For the Poisson data term we already know
-            # that the EM-style preconditioner is diag(x).  For the DTV prior
-            # we approximate the diagonal of the Hessian via
-            # `prior.diagonal_hessian_approx(x)` and invert it.  The combined
-            # inverse-curvature for the sum of both terms is given by the
-            # *parallel sum* 1/(H_d + H_r) = (H_d^{-1} H_r^{-1}) / (H_d^{-1} + H_r^{-1}).
-            eps_safe = 1e-6
-
-            # Data preconditioner (for RL/EM-style algorithms)
-            data_precond = x
-
-            # Prior preconditioner (inverse of diagonal Hessian)
-            prior_hess_diag = prior.diagonal_hessian_approx(x)
-            prior_hess_diag.maximum(eps_safe, out=prior_hess_diag)
-            prior_precond = 1.0 / prior_hess_diag
-
-            if mean == 'arithmetic':
-                precond = (data_precond + prior_precond) / 2.0
-            elif mean == 'geometric':
-                precond = np.sqrt(data_precond * prior_precond)
-            elif mean == 'harmonic':
-                denom = data_precond + prior_precond
-                denom.maximum(eps_safe, out=denom)
-                precond = (data_precond * prior_precond) / denom
-            else:
-                raise ValueError(f"Unknown mean '{mean}' for preconditioner.")
-
-            # Guard against vanishing diagonals – keep strictly positive
-            precond.maximum(eps_safe, out=precond)
-
-            if LOGGER.isEnabledFor(logging.DEBUG):
-                def _stats(image):
-                    arr = image.as_array()
-                    return (
-                        float(np.min(arr)),
-                        float(np.max(arr)),
-                        float(np.mean(arr)),
-                    )
-
-                data_stats = _stats(data_precond)
-                prior_stats = _stats(prior_precond)
-                combo_stats = _stats(precond)
-                LOGGER.debug(
-                    "Preconditioner stats | data min/mean/max: %.3e / %.3e / %.3e | "
-                    "prior min/mean/max: %.3e / %.3e / %.3e | "
-                    "combined min/mean/max: %.3e / %.3e / %.3e",
-                    data_stats[0], data_stats[2], data_stats[1],
-                    prior_stats[0], prior_stats[2], prior_stats[1],
-                    combo_stats[0], combo_stats[2], combo_stats[1],
-                )
-
-            return precond
 
         class SaveCallback(Callback):
             def __init__(self, interval: int, save_first_n: int = 5) -> None:
@@ -610,26 +505,24 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
         else:
             dtv_initial = images["OSEM"]
 
-        maprl = MAPRL(
+        lbfgs_options = LBFGSBOptions(
+            max_linesearch=config.lbfgs_max_linesearch,
+            ftol=config.lbfgs_ftol,
+            gtol=config.lbfgs_gtol,
+            enforce_non_negativity=True,
+        )
+        lbfgsb = LBFGSBOptimizer(
             initial_estimate=dtv_initial,
             data_fidelity=df,
             prior=prior,
-            step_size=config.step_size,
-            relaxation_eta=config.relaxation_eta,
-            update_objective_interval=config.update_obj_interval,
-            armijo_iterations=config.armijo_iterations,
-            armijo_update_initial=config.armijo_update_initial,
-            armijo_update_interval=config.armijo_update_interval,
-            preconditioner=compute_preconditioner,
-            preconditioner_update_initial=config.preconditioner_update_initial,
-            preconditioner_update_interval=config.preconditioner_update_interval,
+            options=lbfgs_options,
         )
-        maprl.run(
+        lbfgsb.run(
             verbose=1,
             iterations=config.dtv_iterations,
             callbacks=dtv_callbacks,
         )
-        deconv_dtv = maprl.solution
+        deconv_dtv = lbfgsb.solution
         with np.errstate(invalid="ignore"):
             deconv_dtv.maximum(0, out=deconv_dtv)
         reconstructions["DTV"] = deconv_dtv
@@ -641,7 +534,7 @@ def run_pipeline(config: PipelineConfig, kernel_params: KernelParameters) -> Non
             ranges=[(0, osem_vmax), (0, osem_vmax)],
         )
         save_objective(
-            maprl.objective,
+            lbfgsb.objective,
             output_dir / "deconv_dtv_objective.png",
             "DTV Objective",
         )

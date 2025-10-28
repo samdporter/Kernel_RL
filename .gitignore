@@ -46,3 +46,10 @@ Thumbs.db
 # Docker
 .docker/
 *.log
+
+# Stuff for MIC
+old_results/
+poster_figures/
+results/
+alignment_test_output/
+obsolete/

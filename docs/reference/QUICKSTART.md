@@ -216,7 +216,8 @@ ls data/spheres/
 - `rl_iterations_kernel`: Iterations for KRL/HKRL
 - `dtv_iterations`: Iterations for DTV
 - `alpha`: DTV regularization strength (higher = more smoothing)
-- `step_size`: DTV step size
+- `lbfgs_max_linesearch`: Max line-search steps for DTV optimiser
+- `lbfgs_ftol` / `lbfgs_gtol`: Function and gradient tolerances for DTV optimiser
 - `fwhm`: PSF full-width at half-maximum (mm)
 
 **Backends:**

@@ -22,10 +22,10 @@ from krl import (
     get_kernel_operator,
     create_gaussian_blur,
     DirectionalOperator,
-    MAPRL,
     load_image,
     save_image,
 )
+from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
 from krl.utils import get_array
 
 # Import CIL components
@@ -166,8 +166,9 @@ def main():
     # DTV parameters
     dtv_iterations = 100
     alpha = 0.1                       # Regularization strength
-    step_size = 0.1
-    relaxation_eta = 0.01
+    lbfgs_max_linesearch = 20
+    lbfgs_ftol = 1e-6
+    lbfgs_gtol = 1e-6
 
     print("="*60)
     print("KRL Spheres Phantom Reconstruction Example")
@@ -208,7 +209,7 @@ def main():
     rl_obj = None
     krl_obj = None
     hkrl_obj = None
-    maprl_obj = None
+    dtv_obj = None
 
     if 'RL' in ALGORITHMS_TO_RUN:
         # ========== Standard RL ==========
@@ -269,9 +270,9 @@ def main():
         print(f"   Saved: {output_dir / 'hkrl_reconstruction.nii.gz'}")
 
     if 'DTV' in ALGORITHMS_TO_RUN:
-        # ========== MAP-RL with Directional TV (DTV) ==========
+        # ========== L-BFGS-B with Directional TV (DTV) ==========
 
-        print("\n6. Running MAP-RL with Directional TV...")
+        print("\n6. Running L-BFGS-B with Directional TV...")
 
         # Data fidelity term (KL divergence)
         f = fn.KullbackLeibler(
@@ -288,19 +289,21 @@ def main():
             fn.SmoothMixedL21Norm(epsilon=1e-4), d_op
         )
 
-        # MAP-RL algorithm
-        maprl = MAPRL(
+        lbfgs = LBFGSBOptimizer(
             initial_estimate=emission,
             data_fidelity=df,
             prior=prior,
-            step_size=step_size,
-            relaxation_eta=relaxation_eta,
-            update_objective_interval=1,
+            options=LBFGSBOptions(
+                max_linesearch=lbfgs_max_linesearch,
+                ftol=lbfgs_ftol,
+                gtol=lbfgs_gtol,
+                enforce_non_negativity=True,
+            ),
         )
 
-        maprl.run(verbose=1, iterations=dtv_iterations)
-        dtv_result = maprl.solution
-        maprl_obj = maprl.objective
+        lbfgs.run(verbose=1, iterations=dtv_iterations)
+        dtv_result = lbfgs.solution
+        dtv_obj = lbfgs.objective
 
         save_image(dtv_result, output_dir / "dtv_reconstruction.nii.gz")
         print(f"   Saved: {output_dir / 'dtv_reconstruction.nii.gz'}")
@@ -313,12 +316,12 @@ def main():
         "Richardson-Lucy (RL)",
         "Kernelised RL (KRL)",
         "Hybrid KRL (HKRL)",
-        "MAP-RL with DTV"
+        "L-BFGS-B with DTV"
     ]
 
     # Plot objectives
     fig, ax = plt.subplots(1, 1, figsize=(10, 5))
-    for i, obj in enumerate([rl_obj, krl_obj, hkrl_obj, maprl_obj]):
+    for i, obj in enumerate([rl_obj, krl_obj, hkrl_obj, dtv_obj]):
         if obj is not None:
             ax.plot(obj, label=titles[i], linewidth=2)
     ax.set_xlabel("Iteration")

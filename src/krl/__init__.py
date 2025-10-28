@@ -6,7 +6,7 @@ anatomical guidance for PET imaging, including:
 - Standard Richardson-Lucy (RL)
 - Kernelised RL (KRL) with anatomical-guided weights
 - Hybrid KRL (HKRL) mixing emission and anatomical features
-- MAP-RL with Directional Total Variation (DTV)
+- L-BFGS-B with Directional Total Variation (DTV)
 """
 
 __version__ = "0.1.0"
@@ -22,6 +22,7 @@ from krl.operators.blurring import GaussianBlurringOperator, create_gaussian_blu
 from krl.operators.gradient import Gradient
 from krl.operators.directional import DirectionalOperator
 from krl.algorithms.maprl import MAPRL
+from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
 from krl.utils import (
     get_array, load_image, save_image, 
     load_nifti_as_imagedata, prepare_brainweb_pet_dataset,
@@ -41,6 +42,8 @@ __all__ = [
     "DirectionalOperator",
     # Algorithms
     "MAPRL",
+    "LBFGSBOptimizer",
+    "LBFGSBOptions",
     # Utils
     "get_array",
     "load_image",

@@ -101,7 +101,7 @@ DEFAULT_CONFIG = PipelineConfig(
     do_drl=False,
     rl_iterations_standard=100,
     rl_iterations_kernel=100,
-    dtv_iterations=1000,
+    dtv_iterations=500,
     step_size=1.0,
     psf_kernel_size=5,
     use_uniform_initial=True,
@@ -174,7 +174,7 @@ PIPELINES: Dict[str, Dict[str, object]] = {
         },
         "kernel_overrides": {},
         "config_grid": {
-            "alpha": [0.5,1,2.0,5.0],
+            "alpha": [0.01,0.02,0.05,0.1,0.2,0.5,1.0],
             # Example: uncomment to sweep over initial image types
             "use_uniform_initial": [False], 
         },

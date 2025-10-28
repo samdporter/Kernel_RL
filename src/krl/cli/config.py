@@ -81,6 +81,9 @@ class PipelineConfig:
     armijo_update_interval: int = 25
     preconditioner_update_initial: int = 10
     preconditioner_update_interval: int = 25
+    lbfgs_max_linesearch: int = 20
+    lbfgs_ftol: float = 1e-8
+    lbfgs_gtol: float = 1e-8
     psf_kernel_size: int = 5
     fwhm: Tuple[float, float, float] = (6.0, 6.0, 6.0)
     save_first_n: int = 5
@@ -109,9 +112,9 @@ class PipelineConfig:
             )
         if self.do_drl:
             parts.append(
-                f"DRL_a{self._fmt(self.alpha)}"
-                f"_s{self._fmt(self.step_size)}"
-                f"_eta{self._fmt(self.relaxation_eta)}"
+                f"DTV_a{self._fmt(self.alpha)}"
+                f"_ls{self.lbfgs_max_linesearch}"
+                f"_ftol{self._fmt(self.lbfgs_ftol)}"
             )
         suffix = "_".join(parts) + f"_G{self._fmt(self.fwhm[0])}mm"
         if self.use_uniform_initial:
@@ -137,6 +140,9 @@ class PipelineConfig:
         yield f"  rl_iterations_kernel: {self.rl_iterations_kernel}"
         yield f"  freeze_iteration: {self.freeze_iteration}"
         yield f"  dtv_iterations: {self.dtv_iterations}"
+        yield f"  lbfgs_max_linesearch: {self.lbfgs_max_linesearch}"
+        yield f"  lbfgs_ftol: {self.lbfgs_ftol}"
+        yield f"  lbfgs_gtol: {self.lbfgs_gtol}"
         yield f"  psf_kernel_size: {self.psf_kernel_size}"
         yield f"  fwhm: {self.fwhm}"
         yield f"  use_uniform_initial: {self.use_uniform_initial}"
@@ -197,6 +203,9 @@ def parse_common_args(
         parser.add_argument("--armijo-update-interval", type=int, default=defaults.armijo_update_interval, help="Perform Armijo line search every N iterations after initial period")
         parser.add_argument("--preconditioner-update-initial", type=int, default=defaults.preconditioner_update_initial, help="Update preconditioner every iteration for first N iterations")
         parser.add_argument("--preconditioner-update-interval", type=int, default=defaults.preconditioner_update_interval, help="Update preconditioner every N iterations after initial period")
+        parser.add_argument("--lbfgs-max-linesearch", type=int, default=defaults.lbfgs_max_linesearch, help="Maximum number of line-search steps per LBFGS iteration")
+        parser.add_argument("--lbfgs-ftol", type=float, default=defaults.lbfgs_ftol, help="Function tolerance for LBFGS convergence")
+        parser.add_argument("--lbfgs-gtol", type=float, default=defaults.lbfgs_gtol, help="Gradient tolerance for LBFGS convergence")
 
     parser.add_argument("--show-plots", dest="show_plots", action="store_true", default=defaults.show_plots)
     parser.add_argument("--no-show-plots", dest="show_plots", action="store_false")
@@ -265,6 +274,9 @@ def parse_common_args(
         armijo_update_interval=getattr(args, "armijo_update_interval", defaults.armijo_update_interval),
         preconditioner_update_initial=getattr(args, "preconditioner_update_initial", defaults.preconditioner_update_initial),
         preconditioner_update_interval=getattr(args, "preconditioner_update_interval", defaults.preconditioner_update_interval),
+        lbfgs_max_linesearch=getattr(args, "lbfgs_max_linesearch", defaults.lbfgs_max_linesearch),
+        lbfgs_ftol=getattr(args, "lbfgs_ftol", defaults.lbfgs_ftol),
+        lbfgs_gtol=getattr(args, "lbfgs_gtol", defaults.lbfgs_gtol),
         psf_kernel_size=args.psf_kernel_size,
         fwhm=_tuple3(args.fwhm),
         save_first_n=args.save_first_n,
