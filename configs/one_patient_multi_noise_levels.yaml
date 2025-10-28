@@ -1,0 +1,11 @@
+scenario: one_patient_multi_noise_levels
+out_root: data/brainweb/one_patient_multi_noise_levels
+patient_id: 7
+mr_modality: T1
+fwhm_mm: 5.0
+noise_model: poisson
+poisson_scale_list: [5.0e4, 1.0e5, 2.0e5, 5.0e5]
+seed: 99
+# For Gaussian instead:
+# noise_model: gaussian
+# gaussian_sigma_list: [0.02, 0.05, 0.10, 0.20]

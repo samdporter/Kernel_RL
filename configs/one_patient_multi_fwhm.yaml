@@ -1,0 +1,8 @@
+scenario: one_patient_multi_fwhm
+out_root: data/brainweb/one_patient_multi_fwhm
+patient_id: 7
+mr_modality: T1
+noise_model: poisson
+poisson_scale: 1.0e5
+fwhm_list_mm: [3.0, 4.0, 5.0, 6.0, 8.0]
+seed: 7

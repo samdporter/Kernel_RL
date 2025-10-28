@@ -1,0 +1,8 @@
+scenario: cohort20_same_noise_fwhm
+out_root: data/brainweb/cohort_20_same_noise_fwhm
+subject_ids: [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+mr_modality: T1
+fwhm_mm: 5.0
+noise_model: poisson
+poisson_scale: 1.0e5
+seed: 1337

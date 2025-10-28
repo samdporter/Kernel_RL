@@ -1,0 +1,9 @@
+scenario: one_patient_multi_noise_realisations
+out_root: data/brainweb/one_patient_multi_noise_realisations
+patient_id: 7
+mr_modality: T1
+fwhm_mm: 5.0
+noise_model: poisson
+poisson_scale: 1.0e5
+n_realisations: 20
+seed: 2025
