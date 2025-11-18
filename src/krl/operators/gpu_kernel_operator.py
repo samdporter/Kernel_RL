@@ -130,6 +130,42 @@ class TorchKernelOperator(BaseKernelOperator):
         else:
             print("TorchKernelOperator: Using CPU (GPU not available)")
 
+    @staticmethod
+    def _pad_reflect_inclusive(tensor, pad):
+        """
+        Pad tensor along the last three dimensions using inclusive reflection,
+        matching the boundary handling of the CPU kernels.
+        """
+        if pad <= 0:
+            return tensor
+        result = tensor
+        dims = (-1, -2, -3)
+        for dim in dims:
+            size = result.size(dim)
+            if pad > size:
+                raise ValueError(f"Pad size {pad} exceeds dimension {size}")
+            left = result.narrow(dim, 0, pad).flip(dim)
+            right = result.narrow(dim, size - pad, pad).flip(dim)
+            result = torch.cat([left, result, right], dim=dim)
+        return result
+
+    @staticmethod
+    def _reflect_indices(indices, size):
+        """Reflect indices into [0, size) using inclusive reflection."""
+        if size <= 1:
+            return torch.zeros_like(indices, dtype=torch.int64)
+        result = indices.clone()
+        while True:
+            mask_neg = result < 0
+            if mask_neg.any():
+                result[mask_neg] = -result[mask_neg] - 1
+            mask_high = result >= size
+            if mask_high.any():
+                result[mask_high] = 2 * size - result[mask_high] - 1
+            if not mask_neg.any() and not mask_high.any():
+                break
+        return result
+
     def set_anatomical_image(self, image):
         """Override to clear GPU caches when anatomical image changes."""
         super().set_anatomical_image(image)
@@ -265,9 +301,7 @@ class TorchKernelOperator(BaseKernelOperator):
         use_anat = sigma_anat > 0
         use_dist = distance_weighting and sigma_dist > 0
 
-        anat_padded = F.pad(anat_arr.unsqueeze(0).unsqueeze(0),
-                            (half, half, half, half, half, half),
-                            mode='reflect').squeeze()
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
 
         weights = torch.empty((s0, s1, s2, k), dtype=self.torch_dtype, device=self.device)
 
@@ -329,9 +363,7 @@ class TorchKernelOperator(BaseKernelOperator):
         use_anat = sigma_anat > 0
         use_dist = distance_weighting and sigma_dist > 0
 
-        anat_padded = F.pad(anat_arr.unsqueeze(0).unsqueeze(0),
-                            (half, half, half, half, half, half),
-                            mode='reflect').squeeze()
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
 
         weights = torch.empty((s0, s1, s2, total), dtype=self.torch_dtype, device=self.device)
 
@@ -399,9 +431,7 @@ class TorchKernelOperator(BaseKernelOperator):
         mask_indices = torch.empty((s0, s1, s2, k_keep), dtype=torch.int16, device=self.device)
 
         # Pad anatomical array for boundary handling (reflection)
-        anat_padded = F.pad(anat_arr.unsqueeze(0).unsqueeze(0),
-                           (half, half, half, half, half, half),
-                           mode='reflect').squeeze()
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
 
         # Build all n³ neighbor offsets
         offsets = []
@@ -652,15 +682,9 @@ class TorchKernelOperator(BaseKernelOperator):
         out = torch.empty_like(x_arr)
 
         # Pad arrays for boundary handling
-        x_padded = F.pad(x_arr.unsqueeze(0).unsqueeze(0),
-                        (half, half, half, half, half, half),
-                        mode='reflect').squeeze()
-        ref_padded = F.pad(ref_arr.unsqueeze(0).unsqueeze(0),
-                          (half, half, half, half, half, half),
-                          mode='reflect').squeeze()
-        anat_padded = F.pad(anat_arr.unsqueeze(0).unsqueeze(0),
-                            (half, half, half, half, half, half),
-                            mode='reflect').squeeze()
+        x_padded = self._pad_reflect_inclusive(x_arr, half)
+        ref_padded = self._pad_reflect_inclusive(ref_arr, half)
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
 
         # Process in batches to manage memory
         mask_elem_bytes = mask_cpu.element_size()
@@ -766,15 +790,9 @@ class TorchKernelOperator(BaseKernelOperator):
         out = torch.empty_like(x_arr)
 
         # Pad arrays
-        x_padded = F.pad(x_arr.unsqueeze(0).unsqueeze(0),
-                        (half, half, half, half, half, half),
-                        mode='reflect').squeeze()
-        ref_padded = F.pad(ref_arr.unsqueeze(0).unsqueeze(0),
-                          (half, half, half, half, half, half),
-                          mode='reflect').squeeze()
-        anat_padded = F.pad(anat_arr.unsqueeze(0).unsqueeze(0),
-                            (half, half, half, half, half, half),
-                            mode='reflect').squeeze()
+        x_padded = self._pad_reflect_inclusive(x_arr, half)
+        ref_padded = self._pad_reflect_inclusive(ref_arr, half)
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
 
         # Build offsets
         offsets = []
@@ -965,38 +983,14 @@ class TorchKernelOperator(BaseKernelOperator):
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
-        pad_shape = (s0 + 2 * half, s1 + 2 * half, s2 + 2 * half)
-        out_padded = torch.zeros(pad_shape, dtype=self.torch_dtype, device=self.device)
-        out_flat = out_padded.view(-1)
-
-        # Pad reference/anatomy for consistent reflection handling
-        ref_padded = F.pad(
-            ref_arr.unsqueeze(0).unsqueeze(0),
-            (half, half, half, half, half, half),
-            mode="reflect",
-        ).squeeze()
-        anat_padded = F.pad(
-            anat_arr.unsqueeze(0).unsqueeze(0),
-            (half, half, half, half, half, half),
-            mode="reflect",
-        ).squeeze()
-
-        pad_s1 = pad_shape[1]
-        pad_s2 = pad_shape[2]
+        out = torch.zeros((s0, s1, s2), dtype=self.torch_dtype, device=self.device)
+        out_flat = out.view(-1)
 
         # Process in batches
         mask_elem_bytes = mask_cpu.element_size()
         batch_size = self._select_batch_size(s0, s1, s2, k, mask_elem_bytes)
-        j_pad = (
-            torch.arange(s1, device=self.device, dtype=torch.int64)
-            .view(1, -1, 1)
-            + half
-        )
-        k_pad = (
-            torch.arange(s2, device=self.device, dtype=torch.int64)
-            .view(1, 1, -1)
-            + half
-        )
+        j_base = torch.arange(s1, device=self.device, dtype=torch.int64).view(1, -1, 1)
+        k_base = torch.arange(s2, device=self.device, dtype=torch.int64).view(1, 1, -1)
 
         for i_start in range(0, s0, batch_size):
             i_end = min(i_start + batch_size, s0)
@@ -1008,11 +1002,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
             center_anat = anat_arr[i_start:i_end, :, :]
             mask_chunk = mask_cpu[i_start:i_end].to(self.device, non_blocking=True)
-            i_pad = (
-                torch.arange(i_start, i_end, device=self.device, dtype=torch.int64)
-                .view(-1, 1, 1)
-                + half
-            )
+            i_base = torch.arange(i_start, i_end, device=self.device, dtype=torch.int64).view(-1, 1, 1)
 
             if hybrid:
                 c_ref = ref_arr[i_start:i_end, :, :]
@@ -1024,11 +1014,11 @@ class TorchKernelOperator(BaseKernelOperator):
                 dj = ((flat_indices // n) % n) - half
                 di = (flat_indices // (n * n)) - half
 
-                i_indices = i_pad + di
-                j_indices = j_pad + dj
-                k_indices = k_pad + dk
+                i_indices = self._reflect_indices(i_base + di, s0)
+                j_indices = self._reflect_indices(j_base + dj, s1)
+                k_indices = self._reflect_indices(k_base + dk, s2)
 
-                neighbor_anat = anat_padded[i_indices, j_indices, k_indices]
+                neighbor_anat = anat_arr[i_indices, j_indices, k_indices]
                 diff_an = neighbor_anat - center_anat
                 if use_anat:
                     w = torch.exp(-diff_an * diff_an / sig2_an)
@@ -1043,17 +1033,15 @@ class TorchKernelOperator(BaseKernelOperator):
                     w = w * torch.exp(-dist_sq / dist2_an)
 
                 if use_em:
-                    ref_neighbor = ref_padded[i_indices, j_indices, k_indices]
+                    ref_neighbor = ref_arr[i_indices, j_indices, k_indices]
                     diff_em = ref_neighbor - c_ref
                     w = w * torch.exp(-diff_em * diff_em / sig2_em)
 
                 contrib = val * w
-                linear_idx = (i_indices * pad_s1 + j_indices) * pad_s2 + k_indices
+                linear_idx = (i_indices * s1 + j_indices) * s2 + k_indices
                 out_flat.scatter_add_(0, linear_idx.reshape(-1), contrib.reshape(-1))
 
-        return out_padded[
-            half : half + s0, half : half + s1, half : half + s2
-        ].contiguous()
+        return out
 
     def _torch_adjoint_dense(self, x_arr, ref_arr, anat_arr, norm_arr,
                              n, sigma_anat, sigma_dist, sigma_emission,
@@ -1070,23 +1058,8 @@ class TorchKernelOperator(BaseKernelOperator):
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
-        pad_shape = (s0 + 2 * half, s1 + 2 * half, s2 + 2 * half)
-        out_padded = torch.zeros(pad_shape, dtype=self.torch_dtype, device=self.device)
-        out_flat = out_padded.view(-1)
-
-        ref_padded = F.pad(
-            ref_arr.unsqueeze(0).unsqueeze(0),
-            (half, half, half, half, half, half),
-            mode="reflect",
-        ).squeeze()
-        anat_padded = F.pad(
-            anat_arr.unsqueeze(0).unsqueeze(0),
-            (half, half, half, half, half, half),
-            mode="reflect",
-        ).squeeze()
-
-        pad_s1 = pad_shape[1]
-        pad_s2 = pad_shape[2]
+        out = torch.zeros((s0, s1, s2), dtype=self.torch_dtype, device=self.device)
+        out_flat = out.view(-1)
 
         offsets = []
         for di in range(-half, half + 1):
@@ -1095,16 +1068,8 @@ class TorchKernelOperator(BaseKernelOperator):
                     offsets.append((di, dj, dk))
 
         batch_size = min(s0, self.max_gpu_batch_slices)
-        j_pad = (
-            torch.arange(s1, device=self.device, dtype=torch.int64)
-            .view(1, -1, 1)
-            + half
-        )
-        k_pad = (
-            torch.arange(s2, device=self.device, dtype=torch.int64)
-            .view(1, 1, -1)
-            + half
-        )
+        j_base = torch.arange(s1, device=self.device, dtype=torch.int64).view(1, -1, 1)
+        k_base = torch.arange(s2, device=self.device, dtype=torch.int64).view(1, 1, -1)
 
         for i_start in range(0, s0, batch_size):
             i_end = min(i_start + batch_size, s0)
@@ -1115,21 +1080,17 @@ class TorchKernelOperator(BaseKernelOperator):
                 val = torch.where(norm > 1e-12, val / norm, torch.zeros_like(val))
 
             center_anat = anat_arr[i_start:i_end, :, :]
-            i_pad = (
-                torch.arange(i_start, i_end, device=self.device, dtype=torch.int64)
-                .view(-1, 1, 1)
-                + half
-            )
+            i_base = torch.arange(i_start, i_end, device=self.device, dtype=torch.int64).view(-1, 1, 1)
 
             if hybrid:
                 c_ref = ref_arr[i_start:i_end, :, :]
 
             for di, dj, dk in offsets:
-                i_indices = i_pad + di
-                j_indices = j_pad + dj
-                k_indices = k_pad + dk
+                i_indices = self._reflect_indices(i_base + di, s0)
+                j_indices = self._reflect_indices(j_base + dj, s1)
+                k_indices = self._reflect_indices(k_base + dk, s2)
 
-                neighbor_anat = anat_padded[i_indices, j_indices, k_indices]
+                neighbor_anat = anat_arr[i_indices, j_indices, k_indices]
                 diff_an = neighbor_anat - center_anat
                 if use_anat:
                     w = torch.exp(-diff_an * diff_an / sig2_an)
@@ -1142,17 +1103,15 @@ class TorchKernelOperator(BaseKernelOperator):
                     w = w * dist_weight
 
                 if use_em:
-                    ref_neighbor = ref_padded[i_indices, j_indices, k_indices]
+                    ref_neighbor = ref_arr[i_indices, j_indices, k_indices]
                     diff_em = ref_neighbor - c_ref
                     w = w * torch.exp(-diff_em * diff_em / sig2_em)
 
                 contrib = val * w
-                linear_idx = (i_indices * pad_s1 + j_indices) * pad_s2 + k_indices
+                linear_idx = (i_indices * s1 + j_indices) * s2 + k_indices
                 out_flat.scatter_add_(0, linear_idx.reshape(-1), contrib.reshape(-1))
 
-        return out_padded[
-            half : half + s0, half : half + s1, half : half + s2
-        ].contiguous()
+        return out
 
     def clear_gpu(self, release_cached_tensors=True):
         """

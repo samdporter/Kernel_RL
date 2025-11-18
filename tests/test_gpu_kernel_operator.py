@@ -20,6 +20,15 @@ from src.krl.operators.kernel_operator import get_kernel_operator
 
 CUDA_AVAILABLE = TORCH_AVAILABLE and torch.cuda.is_available()
 
+DEVICE_PARAMS = [
+    pytest.param("cpu", id="cpu"),
+    pytest.param(
+        "cuda",
+        id="cuda",
+        marks=pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available"),
+    ),
+]
+
 # Skip all tests if torch not available
 pytestmark = pytest.mark.skipif(
     not TORCH_AVAILABLE,
@@ -306,14 +315,15 @@ class TestGPUForwardAdjoint:
 class TestGPUAdjointCorrectness:
     """Adjoint-specific correctness checks."""
 
+    @pytest.mark.parametrize("device", DEVICE_PARAMS)
     @pytest.mark.parametrize("use_mask", [True, False])
     def test_inner_product_matches_adjoint(
-        self, small_geometry, anatomical_gradient, use_mask
+        self, small_geometry, anatomical_gradient, use_mask, device
     ):
         """Check ⟨Ax, y⟩ equals ⟨x, Aᵀy⟩ for masked and dense modes."""
         params = dict(
             backend="torch",
-            device="cpu",
+            device=device,
             dtype="float32",
             num_neighbours=5,
             sigma_anat=0.2,
@@ -343,12 +353,13 @@ class TestGPUAdjointCorrectness:
         denom = max(abs(lhs), abs(rhs), 1.0)
         assert abs(lhs - rhs) / denom < 5e-4
 
-    def test_normalisation_map_precision(self, small_geometry, anatomical_gradient):
+    @pytest.mark.parametrize("device", DEVICE_PARAMS)
+    def test_normalisation_map_precision(self, small_geometry, anatomical_gradient, device):
         """Normalization map should preserve forward precision (no float16 downcast)."""
         op = get_kernel_operator(
             small_geometry,
             backend="torch",
-            device="cpu",
+            device=device,
             dtype="float32",
             num_neighbours=5,
             mask_k=20,

@@ -1,13 +1,21 @@
-"""Test CUDA availability fallback behavior for operators.
+"""CUDA availability tests for operator backend selection.
 
-This test ensures that when PyTorch is installed but CUDA is not available,
-the operators correctly fall back to CPU backends (numba/scipy) instead of
-crashing with "No CUDA GPUs are available" errors.
+These tests confirm both fallback behavior (when CUDA is unavailable) and
+GPU preference (when CUDA is available) for the Gaussian blurring and kernel
+operators.
 """
 import pytest
 import numpy as np
 from dataclasses import dataclass
 from typing import Tuple
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch
+    except ImportError:
+        return False
+    return bool(torch.cuda.is_available())
 
 
 @dataclass
@@ -119,6 +127,32 @@ def test_kernel_operator_auto_backend_without_cuda():
         if "Numba backend not available" in str(e):
             pytest.skip("Numba not available, skipping kernel operator test")
         raise
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="CUDA not available")
+def test_blurring_auto_backend_with_cuda():
+    """Test Gaussian blurring prefers torch backend when CUDA is available."""
+    from krl.operators.blurring import GaussianBlurringOperator
+
+    geometry = MockGeometry()
+    op = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend='auto')
+
+    assert op.backend == 'torch', "Auto backend should select torch when CUDA is available"
+    assert hasattr(op, "psf_t")
+    assert op.psf_t.is_cuda, "Torch PSF tensor should be allocated on CUDA device"
+
+
+@pytest.mark.skipif(not _cuda_available(), reason="CUDA not available")
+def test_kernel_operator_auto_backend_with_cuda():
+    """Test kernel operator uses GPU backend when CUDA is available."""
+    from krl.operators.kernel_operator import get_kernel_operator
+
+    geometry = MockGeometry()
+    op = get_kernel_operator(geometry, backend='auto')
+
+    assert op.backend == 'torch', "Auto backend should choose torch when CUDA is available"
+    assert hasattr(op, "device")
+    assert op.device.type == 'cuda', "Torch kernel operator should target CUDA device"
 
 
 if __name__ == "__main__":
