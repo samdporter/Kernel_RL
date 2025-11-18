@@ -151,20 +151,14 @@ class TorchKernelOperator(BaseKernelOperator):
 
     @staticmethod
     def _reflect_indices(indices, size):
-        """Reflect indices into [0, size) using inclusive reflection."""
+        """Reflect indices into [0, size) with inclusive mirroring."""
         if size <= 1:
             return torch.zeros_like(indices, dtype=torch.int64)
-        result = indices.clone()
-        while True:
-            mask_neg = result < 0
-            if mask_neg.any():
-                result[mask_neg] = -result[mask_neg] - 1
-            mask_high = result >= size
-            if mask_high.any():
-                result[mask_high] = 2 * size - result[mask_high] - 1
-            if not mask_neg.any() and not mask_high.any():
-                break
-        return result
+        reflected = torch.where(indices < 0, -indices - 1, indices)
+        reflected = torch.where(
+            reflected >= size, 2 * size - reflected - 1, reflected
+        )
+        return reflected
 
     def set_anatomical_image(self, image):
         """Override to clear GPU caches when anatomical image changes."""
