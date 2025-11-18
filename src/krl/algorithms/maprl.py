@@ -101,13 +101,24 @@ class MAPRL(Algorithm):
                 loss,
             )
 
+    def _armijo_initial_block(self):
+        """Number of contiguous iterations that should always run Armijo."""
+        if self.armijo_update_initial > 0:
+            if self.armijo_iterations > 0:
+                return min(self.armijo_update_initial, self.armijo_iterations)
+            return self.armijo_update_initial
+        return max(self.armijo_iterations, 0)
+
     def step_size(self):
-        # Use the current step size found by Armijo for the first armijo_iterations
-        if self.iteration <= self.armijo_iterations:
+        initial_block = self._armijo_initial_block()
+        if initial_block > 0 and self.iteration <= initial_block:
             return self._current_step_size
-        # After Armijo period, continue from the last Armijo-found step size
-        # and apply relaxation schedule from that point
-        return self._current_step_size / (1 + self.relaxation_eta * (self.iteration - self.armijo_iterations))
+        baseline_step = self.initial_step_size or self._current_step_size
+        decay_iter = max(self.iteration, 1)
+        denom = 1 + self.relaxation_eta * decay_iter
+        if denom == 0:
+            return baseline_step
+        return baseline_step / denom
 
     def update(self):
         # Update preconditioner if needed
@@ -140,12 +151,16 @@ class MAPRL(Algorithm):
                     LOGGER.info("MAPRL: updated preconditioner at iteration %d", self.iteration)
 
         # Determine if we should perform Armijo line search at this iteration
-        should_armijo = False
-        if self.iteration <= self.armijo_update_initial:
-            # Update every iteration for first N iterations
-            should_armijo = True
-        elif self.iteration <= self.armijo_iterations and self.iteration % self.armijo_update_interval == 0:
-            # Then update periodically until armijo_iterations
+        initial_block = self._armijo_initial_block()
+        should_armijo = initial_block > 0 and self.iteration <= initial_block
+        if (
+            not should_armijo
+            and self.armijo_iterations > 0
+            and self.iteration <= self.armijo_iterations
+            and self.armijo_update_interval > 0
+            and self.iteration % self.armijo_update_interval == 0
+        ):
+            # After the initial block, fall back to periodic Armijo updates
             should_armijo = True
 
         # Perform Armijo line search if scheduled
