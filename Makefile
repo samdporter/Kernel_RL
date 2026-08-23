@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov lint format gpu-test build
+.PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint
 
 help:
 	@echo "cil-krl development commands"
@@ -27,3 +27,12 @@ format:
 
 build:
 	python -m build
+
+study-install:
+	uv pip install -e "./studies[dev]"
+
+study-test:
+	python -m pytest studies/tests
+
+study-lint:
+	ruff check src/ tests/ studies/

@@ -53,3 +53,8 @@ poster_figures/
 results/
 alignment_test_output/
 obsolete/
+
+# study framework runtime data
+data/patients/
+data/brainweb/
+results/
