@@ -31,19 +31,21 @@ class Scenario:
     inputs: tuple[InputSpec, ...]
     methods: tuple[MethodSpec, ...]
     output: Path
+    sim: dict[str, Any]
     raw: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class RunSpec:
     run_id: str
-    scenario_name: str
     study: str
     dataset: dict[str, Any]
     input_kind: str
     input_params: dict[str, Any]
     method_name: str
     method_params: dict[str, Any]
+    sim: dict[str, Any] = field(default_factory=dict)
+    out_root: Path = Path("results")
 
 
 def load_scenario_dict(raw: dict[str, Any]) -> Scenario:
@@ -58,6 +60,7 @@ def load_scenario_dict(raw: dict[str, Any]) -> Scenario:
         inputs=inputs,
         methods=methods,
         output=Path(raw["output"]),
+        sim=dict(raw.get("sim", {})),
         raw=raw,
     )
 
@@ -101,13 +104,14 @@ def expand_scenario(scenario: Scenario) -> list[RunSpec]:
                     runs.append(
                         RunSpec(
                             run_id=run_id,
-                            scenario_name=scenario.output.name,
                             study=scenario.study,
                             dataset=scenario.dataset,
                             input_kind=inp.kind,
                             input_params=input_params,
                             method_name=method.name,
                             method_params=method_params,
+                            sim=scenario.sim,
+                            out_root=scenario.output,
                         )
                     )
     ids = [r.run_id for r in runs]
