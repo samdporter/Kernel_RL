@@ -104,6 +104,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     marker = out_dir / ".done"
     if marker.exists() and not force:
         return out_dir
+    if force:
+        marker.unlink(missing_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if run.study != "spheres":
@@ -136,6 +138,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
                 voxel_mm=ds.voxel_mm,
             )
 
+    lesion_labels = [round(2 * s["radius_mm"]) for s in specs] if run.sim.get("add_tumours") else []
+
     lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
     exclusion = (
         np.logical_or.reduce(lesion_rois or lesion_masks)
@@ -145,6 +149,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     vois = background_vois(gt.shape, exclude_mask=exclusion)
 
     method_cls = METHOD_REGISTRY[run.method_name]
+    if run.method_name == "gtm":
+        raise NotImplementedError("gtm via PETPVC is not wired into the runner yet")
     params = dict(run.method_params)
     n_iterations = int(params.pop("iterations", 1))
     if run.method_name == "iy":
@@ -186,17 +192,16 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
                 best_nrmse = value
                 best_img = it.image.copy()
             for i, mask in enumerate(lesion_masks):
-                d_mm = (
-                    sorted(DEFAULT_TUMOUR_DIAMETERS_MM)[i]
-                    if i < len(DEFAULT_TUMOUR_DIAMETERS_MM)
-                    else i * 10
-                )
+                d_mm = lesion_labels[i]
                 if vois:
-                    row[f"crc_mm{int(d_mm)}"] = crc_percent(mask, it.image, gt, vois)
+                    row[f"crc_mm{d_mm}"] = crc_percent(mask, it.image, gt, vois)
             if vois:
                 row["bv_percent"] = background_variability(it.image, vois)
             rows.append(row)
             final_img = it.image
+
+    if not rows:
+        raise RuntimeError(f"{run.run_id}: method produced no iterates")
 
     write_metrics_csv(rows, out_dir / "metrics.csv")
     if final_img is not None:

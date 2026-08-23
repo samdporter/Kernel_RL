@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 import yaml
 from conftest import write_test_nifti
 
@@ -71,3 +72,20 @@ def test_cli_dry_run_lists_runs_without_executing(tmp_path, capsys):
     assert "post_smoothing" in captured
     markers = list((tmp_path / "results").rglob(".done")) if (tmp_path / "results").exists() else []
     assert markers == []
+
+
+def test_force_failure_removes_marker(tmp_path, monkeypatch):
+    scenario = load_scenario_dict(yaml.safe_load(_mini_scenario(tmp_path).read_text()))
+    run = expand_scenario(scenario)[0]
+    out = execute_run(run)
+    assert (out / ".done").exists()
+
+    import krl_studies.runner.execute as ex
+
+    def boom(self, *args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ex.METHOD_REGISTRY["post_smoothing"], "run", boom)
+    with pytest.raises(RuntimeError):
+        execute_run(run, force=True)
+    assert not (out / ".done").exists()

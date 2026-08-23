@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from krl_studies.config import load_scenario
 from krl_studies.runner.execute import execute_run
@@ -32,6 +33,10 @@ def main(argv=None) -> int:
 
     failures = []
     for i, run in enumerate(runs, start=1):
+        target = Path(run.out_root) / run.run_id / ".done"
+        if target.exists() and not args.force:
+            print(f"[{i}/{len(runs)}] {run.run_id}  skip (marker present)")
+            continue
         print(f"[{i}/{len(runs)}] {run.run_id}")
         try:
             out = execute_run(run, force=args.force)
