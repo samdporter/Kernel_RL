@@ -43,9 +43,10 @@ class PatientDataset:
     def __post_init__(self):
         self.root = Path(self.root)
         self.dir = self.root / self.subject_id
-        if not (self.dir / _FILES["PET"]).exists() or not (self.dir / _FILES["T1"]).exists():
+        missing = [fname for fname in ("PET.nii.gz", "T1.nii.gz") if not (self.dir / fname).exists()]
+        if missing:
             raise FileNotFoundError(
-                f"{self.dir} must contain PET.nii.gz and T1.nii.gz (see data/README.md)"
+                f"{self.dir} is missing patient files: {missing} (see data/README.md)"
             )
         self.pet = _load(self.dir / _FILES["PET"])
         self.guidance = _load(self.dir / _FILES["T1"])

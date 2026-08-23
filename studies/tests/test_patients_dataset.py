@@ -1,3 +1,5 @@
+import zlib
+
 import numpy as np
 import pytest
 
@@ -9,7 +11,7 @@ def _mk(root, sid, with_roi=False):
 
     d = root / sid
     d.mkdir(parents=True)
-    arr = np.random.default_rng(abs(hash(sid)) % 2**31).random((24, 28, 28)).astype("float32")
+    arr = np.random.default_rng(abs(zlib.crc32(sid.encode())) % 2**31).random((24, 28, 28)).astype("float32")
     write_test_nifti(d / "PET.nii.gz", arr)
     write_test_nifti(d / "T1.nii.gz", arr * 2)
     if with_roi:
@@ -31,6 +33,13 @@ def test_patient_dataset_loads_optional_roi(tmp_path):
     assert ds.pet.shape == (24, 28, 28)
     assert ds.guidance.shape == (24, 28, 28)
     assert ds.rois is not None
+    assert ds.ground_truth is None
+
+
+def test_patient_dataset_without_roi(tmp_path):
+    _mk(tmp_path, "C")
+    ds = PatientDataset(subject_id="C", root=tmp_path)
+    assert ds.rois is None
     assert ds.ground_truth is None
 
 
