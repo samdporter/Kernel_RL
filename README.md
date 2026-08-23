@@ -104,6 +104,10 @@ make lint      # ruff
 
 GPU tests need CUDA and are opt-in: `make gpu-test`.
 
+Research benchmark studies live under [`studies/`](studies/README.md) (branch
+`study-framework`): a config-driven, resumable framework for comparing RL
+deconvolution regularisation methods on simulated and patient data.
+
 The research pipelines, benchmark scripts and BrainWeb data preparation used in the
 original study live under [`examples/`](examples/README.md) and are not part of the
 installed package.
