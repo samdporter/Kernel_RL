@@ -7,27 +7,16 @@ from collections.abc import Iterator
 import cil.optimisation.functions as fn
 import cil.optimisation.operators as op
 import numpy as np
-from cil.optimisation.operators import BlurringOperator, GradientOperator
+from cil.optimisation.operators import GradientOperator
 from cil.optimisation.utilities.callbacks import Callback
 from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
 from krl.operators.directional import DirectionalOperator
 from krl.utils import get_array
 
 from krl_studies.methods.base import Iterate, Method
-from krl_studies.methods.richardson_lucy import FWHM_TO_SIGMA, _blur_op
+from krl_studies.methods.richardson_lucy import _blur_op
 
 _WRAPPER_KEYS = ("alpha", "fwhm_mm", "backend", "lbfgs_max_linesearch", "lbfgs_ftol", "lbfgs_gtol")
-
-
-def _psf_kernel(kernel_size: int, sigma: tuple[float, float, float], voxel: tuple[float, float, float]):
-    axes = [np.linspace(-(kernel_size - 1) / 2.0, (kernel_size - 1) / 2.0, kernel_size) for _ in range(3)]
-    sig_vox = [sigma[i] / voxel[i] for i in range(3)]
-    gauss = [np.exp(-0.5 * ax**2 / sv**2) for ax, sv in zip(axes, sig_vox)]
-    k = (
-        np.outer(gauss[0], gauss[1]).reshape(kernel_size, kernel_size, 1)
-        * gauss[2].reshape(1, 1, kernel_size)
-    )
-    return (k / k.sum()).astype(np.float32)
 
 
 class _CaptureSolution(Callback):
@@ -54,22 +43,18 @@ class DTVMethod(Method):
     name = "dtv"
 
     def run(self, observed, guidance, params, n_iterations) -> Iterator[Iterate]:
+        """Stream MAP-RL/dTV iterates.
+
+        L-BFGS-B may converge before n_iterations (gtol/ftol), yielding fewer
+        iterates than requested; consumers must not assume exact counts.
+        """
         unknown = set(params) - set(_WRAPPER_KEYS)
         if unknown:
             raise ValueError(f"unknown parameter(s) {sorted(unknown)}; dtv accepts {sorted(_WRAPPER_KEYS)}")
         if guidance is None:
             raise ValueError("dtv requires anatomical guidance image")
 
-        sigma = tuple(float(params["fwhm_mm"]) * FWHM_TO_SIGMA for _ in range(3))
-        try:
-            blur = _blur_op(observed, float(params["fwhm_mm"]), params.get("backend", "numba"))
-        except (ImportError, AttributeError):
-            voxel = (
-                observed.geometry.voxel_size_z,
-                observed.geometry.voxel_size_y,
-                observed.geometry.voxel_size_x,
-            )
-            blur = BlurringOperator(_psf_kernel(5, sigma, voxel), observed)
+        blur = _blur_op(observed, float(params["fwhm_mm"]), params.get("backend", "numba"))
 
         fidelity = fn.KullbackLeibler(b=observed, eta=observed.geometry.allocate(value=1e-2))
         data_fidelity = fn.OperatorCompositionFunction(fidelity, blur)

@@ -39,6 +39,8 @@ def test_dtv_streams_iterates(tmp_path):
     )
     assert [it.iteration for it in iters] == [1, 2, 3]
     assert all(it.image.min() >= 0 for it in iters)
+    assert all(it.objective is not None for it in iters)
+    assert iters[-1].objective < iters[0].objective
 
 
 def test_dtv_rejects_unknown_params(tmp_path):
