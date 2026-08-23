@@ -74,7 +74,7 @@ def test_rl_lazy_generator_not_consumed_until_needed(observed_pair):
 def test_krl_guidance_changes_result_vs_rl(observed_pair):
     d = observed_pair
     obs, mr = _load(d, "obs.nii"), _load(d, "mr.nii")
-    common = {"fwhm_mm": 3.0, "iterations": 5, "backend": "numba"}
+    common = {"fwhm_mm": 3.0, "backend": "numba"}
     rl = list(RLMethod().run(_as_cil(obs), None, common, 5))
     krl = list(
         KRLMethod().run(
@@ -106,3 +106,22 @@ def test_hkrl_freeze_runs(observed_pair):
         )
     )
     assert len(hkrl) == 4
+
+
+def test_krl_rejects_unknown_params(observed_pair):
+    d = observed_pair
+    obs, mr = _load(d, "obs.nii"), _load(d, "mr.nii")
+    with pytest.raises(ValueError, match="unknown parameter"):
+        KRLMethod().run(
+            _as_cil(obs),
+            _as_cil(mr),
+            {"fwhm_mm": 3.0, "sigma_anat": 1.0, "sigma_anatomy": 2.0},
+            1,
+        )
+
+
+def test_krl_requires_guidance(observed_pair):
+    d = observed_pair
+    obs = _load(d, "obs.nii")
+    with pytest.raises(ValueError, match="guidance"):
+        KRLMethod().run(_as_cil(obs), None, {"fwhm_mm": 3.0, "sigma_anat": 1.0}, 1)

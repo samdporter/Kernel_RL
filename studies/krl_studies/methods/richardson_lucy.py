@@ -54,6 +54,7 @@ class RLMethod(Method):
     name = "rl"
 
     def run(self, observed, guidance, params, n_iterations) -> Iterator[Iterate]:
+        _validate_params(params)
         blur = _blur_op(observed, float(params["fwhm_mm"]), params.get("backend", "numba"))
         captured: list[Iterate] = []
         algo = RichardsonLucy(
@@ -89,8 +90,23 @@ def _kernel_params(params: dict[str, Any]) -> dict[str, Any]:
     return {k: params[k] for k in allowed if k in params}
 
 
+_WRAPPER_KEYS = ("fwhm_mm", "backend", "epsilon", "freeze_iteration")
+
+
+def _validate_params(params: dict[str, Any]) -> None:
+    unknown = set(params) - set(_WRAPPER_KEYS) - set(_kernel_params(params))
+    if unknown:
+        raise ValueError(
+            f"unknown parameter(s) {sorted(unknown)}; wrapper accepts "
+            f"{sorted(set(_WRAPPER_KEYS))} and kernel accepts {sorted(set(_kernel_params(params)))}"
+        )
+
+
 class _KernelMethod(Method):
     def _run_kernel(self, observed, guidance, params, n_iterations, freeze_iteration):
+        _validate_params(params)
+        if guidance is None:
+            raise ValueError(f"{self.name} requires anatomical guidance image")
         blur = _blur_op(observed, float(params["fwhm_mm"]), params.get("backend", "numba"))
         kernel_op = get_kernel_operator(observed, backend=params.get("backend", "numba"))
         kernel_op.set_parameters(_kernel_params(params))
