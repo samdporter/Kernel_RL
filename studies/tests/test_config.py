@@ -51,3 +51,14 @@ def test_slug_is_filesystem_safe_and_deterministic():
 def test_missing_required_keys_raise():
     with pytest.raises(KeyError):
         load_scenario_dict({"study": "spheres"})
+
+
+def test_near_identical_float_params_produce_distinct_runs():
+    scenario = dict(SCENARIO)
+    scenario["methods"] = [
+        {"name": "post_smoothing", "params": {"sigma_mm": [2.00001, 2.00002]}},
+    ]
+    scenario["inputs"] = [{"kind": "preblurred"}]
+    runs = expand_scenario(load_scenario_dict(scenario))
+    assert len(runs) == 2
+    assert len({r.run_id for r in runs}) == 2

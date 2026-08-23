@@ -71,7 +71,7 @@ def _format_value(value: Any) -> str:
     if isinstance(value, bool):
         return "on" if value else "off"
     if isinstance(value, float):
-        return f"{value:.3g}".replace(".", "p")
+        return repr(float(value)).replace(".", "p").replace("+", "")
     return str(value)
 
 
@@ -110,4 +110,7 @@ def expand_scenario(scenario: Scenario) -> list[RunSpec]:
                             method_params=method_params,
                         )
                     )
+    ids = [r.run_id for r in runs]
+    if len(ids) != len(set(ids)):
+        raise ValueError("run_id collision detected; slug formatting is not injective")
     return runs
