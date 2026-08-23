@@ -36,6 +36,16 @@ def test_place_tumours_multiplies_only_inside_masks():
 
 
 def test_place_tumours_does_not_modify_input():
-    pet = np.zeros((30, 30, 30), dtype=np.float32)
+    pet = np.ones((30, 30, 30), dtype=np.float32)
+    snapshot = pet.copy()
     place_tumours(pet, [{"centre_zyx": (15.0, 15.0, 15.0), "radius_mm": 3.0}], 2.0, (1.0,) * 3)
-    assert pet.max() == 0.0
+    assert np.array_equal(pet, snapshot)
+
+
+def test_default_masks_do_not_overlap():
+    specs = default_tumour_specs(shape=(181, 217, 181), voxel_mm=(1.0, 1.0, 1.0))
+    _, masks = place_tumours(np.zeros((181, 217, 181), dtype=np.float32), specs,
+                             contrast=4.0, voxel_mm=(1.0, 1.0, 1.0))
+    for i in range(len(masks)):
+        for j in range(i + 1, len(masks)):
+            assert not (masks[i] & masks[j]).any()

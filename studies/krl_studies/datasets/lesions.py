@@ -33,6 +33,11 @@ def default_tumour_specs(
 ) -> list[dict[str, Any]]:
     if len(shape) != 3:
         raise ValueError("shape must be 3D (z, y, x)")
+    if len(diameters_mm) > len(_POSITION_FRACTIONS):
+        raise ValueError(
+            f"got {len(diameters_mm)} diameters but only "
+            f"{len(_POSITION_FRACTIONS)} fixed positions are defined"
+        )
     centre = np.array(shape, dtype=float) / 2.0
     extent = np.array(shape, dtype=float) * np.array(voxel_mm, dtype=float)
     specs = []
