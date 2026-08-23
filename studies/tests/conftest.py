@@ -8,7 +8,7 @@ def rng():
 
 
 def write_test_nifti(path, array_zyx, voxel_mm=(1.0, 1.0, 1.0)):
-    """Helper used by several test modules; transposes (z,y,x)->(x,y,z)."""
+    """Helper used by several test modules; array and voxel_mm are both (z,y,x)-ordered; saved as (x,y,z)."""
     import nibabel as nib
 
     data_xyz = np.transpose(array_zyx.astype(np.float32), (2, 1, 0))

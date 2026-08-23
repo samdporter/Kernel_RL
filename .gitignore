@@ -1,5 +1,8 @@
 # Data directories
-data/
+# runtime data: ignore by default, but allow the committed synthetic phantom + docs
+data/*
+!data/README.md
+!data/spheres/
 results/
 tmp*.*s
 
