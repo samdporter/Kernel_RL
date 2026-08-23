@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.ndimage import label
 
+from krl_studies.datasets.lesions import sphere_mask
+
 
 def derive_lesion_rois(
     ground_truth: np.ndarray,
@@ -36,10 +38,8 @@ def background_vois(
     """Pick n well-separated spherical background VOIs avoiding exclude_mask.
 
     Candidates are sampled uniformly (seeded), filtered by exclusion + margin,
-    then greedily selected to maximise pairwise separation.
+    then accepted in sample order subject to a minimum separation of 4×radius_vox.
     """
-    from krl_studies.datasets.lesions import sphere_mask
-
     rng = np.random.default_rng(seed)
     lo = np.array([margin_vox] * 3, dtype=float)
     hi = np.array(shape, dtype=float) - margin_vox

@@ -45,5 +45,8 @@ def test_background_vois_are_disjoint_from_lesions_and_deterministic():
     assert all(np.array_equal(a, b) for a, b in zip(v1, v2))
     for voi in v1:
         assert not (voi & exclusion).any()
+    for i, a in enumerate(v1):
+        for b in v1[i + 1:]:
+            assert not (a & b).any()
     union = np.logical_or.reduce(v1)
     assert union.sum() > 0
