@@ -1,0 +1,34 @@
+# Core spheres benchmark: image-space inputs (SIRF variants arrive in Plan 2).
+study: spheres
+dataset:
+  kind: spheres
+  root: data/spheres
+sim:
+  fwhm_mm: 5.5
+  counts: 1.0e5
+  add_tumours: false
+inputs:
+  - kind: reference            # committed MIC2025 blurred image
+  - kind: quick_sim
+    params:
+      fwhm_mm: [5.5]
+      counts: [1.0e5]
+      realisation: [0, 1, 2]
+methods:
+  - name: rl
+    params: {fwhm_mm: 5.5, iterations: 30}
+  - name: krl
+    params:
+      fwhm_mm: 5.5
+      iterations: 30
+      num_neighbours: 9
+      sigma_anat: [0.2, 1.0]
+  - name: iy
+    # iY accumulates unmatched noise residual each iteration AND is highly
+    # sensitive to region definition (the auto-injected 2-compartment split
+    # lumps all spheres into one "hot" mean). Expect early-best behaviour on
+    # this phantom; tissue-label regions arrive with the BrainWeb study.
+    params: {iterations: 10, fwhm_mm: 5.5, damping: 0.5}
+  - name: post_smoothing
+    params: {sigma_mm: [2.0]}
+output: results/spheres_core
