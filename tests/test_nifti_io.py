@@ -1,18 +1,18 @@
 """Tests for NIfTI I/O functionality."""
 
-import numpy as np
-import pytest
 import tempfile
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 
 def test_nifti_load_save_roundtrip():
     """Test loading and saving NIfTI files with CIL ImageData."""
     try:
         import nibabel as nib
-        from krl.utils import _import_cil_image_classes, load_image, save_image
-        _import_cil_image_classes()
-        from cil.framework import ImageGeometry
+
+        from krl.utils import load_image, save_image
     except ImportError:
         pytest.skip("nibabel or CIL not available")
 
@@ -64,6 +64,7 @@ def test_load_nifti_as_imagedata():
     """Test the load_nifti_as_imagedata function directly."""
     try:
         import nibabel as nib
+
         from krl.utils import load_nifti_as_imagedata
     except ImportError:
         pytest.skip("nibabel or CIL not available")
@@ -114,8 +115,8 @@ def test_save_unsupported_format():
     """Test that saving to unsupported formats raises an error."""
     try:
         from cil.framework import ImageGeometry
-        from krl.utils import _import_cil_image_classes, save_image
-        _import_cil_image_classes()
+
+        from krl.utils import save_image
     except ImportError:
         pytest.skip("CIL not available")
 

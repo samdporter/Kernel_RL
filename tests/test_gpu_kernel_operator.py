@@ -1,24 +1,27 @@
 """Tests for GPU kernel operator (PyTorch backend)."""
 
-import math
+import os
+
+import pytest
+
+# Importing torch alongside CIL's native libraries breaks OpenMP on some
+# platforms, so torch-touching tests are opt-in via this environment variable.
+if not os.environ.get("KRL_RUN_GPU_TESTS"):
+    pytest.skip(
+        "GPU tests disabled; set KRL_RUN_GPU_TESTS=1 to run them",
+        allow_module_level=True,
+    )
+
 from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
-import pytest
+import torch
 
-# Try importing torch to check if GPU tests should run
-try:
-    import torch
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
-    torch = None  # type: ignore
+from krl.operators.kernel_operator import get_kernel_operator
 
-# Import after torch check
-from src.krl.operators.kernel_operator import get_kernel_operator
-
-CUDA_AVAILABLE = TORCH_AVAILABLE and torch.cuda.is_available()
+CUDA_AVAILABLE = torch.cuda.is_available()
+TORCH_AVAILABLE = True
 
 DEVICE_PARAMS = [
     pytest.param("cpu", id="cpu"),
@@ -114,7 +117,7 @@ class TestBasicImports:
     def test_torch_import(self):
         """Test PyTorch is imported."""
         assert TORCH_AVAILABLE, "PyTorch should be available for GPU tests."
-    
+
     def test_cuda_availability(self):
         """Test CUDA availability."""
         if TORCH_AVAILABLE:

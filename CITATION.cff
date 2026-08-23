@@ -1,0 +1,28 @@
+cff-version: 1.2.0
+title: cil-krl - Kernelised Richardson-Lucy Deconvolution for PET
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - family-names: Erlandsson
+    given-names: Kjell
+    email: kjell.erlandsson@kcl.ac.uk
+    affiliation: King's College London
+identifiers:
+  - description: This software
+    type: url
+    value: https://github.com/KCL-BMEIS/KRL
+repository-code: "https://github.com/KCL-BMEIS/KRL"
+abstract: >-
+  A CIL plugin implementing anatomically-guided (kernelised)
+  Richardson-Lucy deconvolution for PET imaging, with CPU and GPU
+  backends, MAP-RL with preconditioning, and directional total
+  variation regularisation.
+keywords:
+  - PET
+  - Richardson-Lucy
+  - deconvolution
+  - CIL
+  - image reconstruction
+license: MIT

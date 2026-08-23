@@ -6,14 +6,8 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
 import numpy as np
+from cil.framework import ImageData
 from scipy.optimize import Bounds, minimize
-
-try:
-    from cil.framework import ImageData
-except ImportError:  # pragma: no cover
-    from typing import Any
-
-    ImageData = Any  # type: ignore
 
 
 @dataclass

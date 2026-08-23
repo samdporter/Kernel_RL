@@ -1,25 +1,8 @@
 """Richardson-Lucy deconvolution algorithm compatible with CIL's Algorithm interface."""
 
+import cil.optimisation.operators as op
 import numpy as np
-
-try:
-    from cil.optimisation.algorithms import Algorithm
-    import cil.optimisation.operators as op
-except ImportError:
-    # Fallback for testing or when CIL is not available
-    class Algorithm:
-        def __init__(self, **kwargs):
-            self.iteration = 0
-            self.loss = []
-            self.configured = False
-
-        def run(self, iterations, verbose=0, callbacks=None):
-            for i in range(iterations):
-                self.iteration = i + 1
-                self.update()
-                if callbacks:
-                    for cb in callbacks:
-                        cb(self)
+from cil.optimisation.algorithms import Algorithm
 
 
 class RichardsonLucy(Algorithm):

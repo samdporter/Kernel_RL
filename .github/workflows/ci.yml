@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }} (CPU)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CIL via micromamba (not on PyPI)
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: cil-env
+          create-args: >-
+            --channel conda-forge
+            --channel ccpi
+            python=${{ matrix.python-version }}
+            cil
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Create venv on top of the conda python
+        run: |
+          UV_PYTHON="$MAMBA_ROOT_PREFIX/envs/cil-env/bin/python"
+          uv venv --python "$UV_PYTHON" .venv
+
+      - name: Install package
+        run: |
+          uv pip install --python .venv -e ".[dev]"
+
+      - name: Show versions
+        run: |
+          .venv/bin/python -c "import cil, krl, numpy, numba; print('cil', cil.__version__, '| krl', krl.__version__, '| numpy', numpy.__version__)"
+
+      - name: Lint
+        run: |
+          uv pip install --python .venv ruff
+          .venv/bin/ruff check src/ tests/
+
+      - name: Run CPU tests
+        run: |
+          .venv/bin/python -m pytest tests/ -v --tb=short
+
+  gpu-test:
+    name: GPU tests (CUDA)
+    runs-on: [self-hosted, gpu]
+    if: vars.RUN_GPU_TESTS == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CIL via micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: cil-env
+          create-args: >-
+            --channel conda-forge
+            --channel ccpi
+            python=3.11
+            cil
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Create venv and install package with torch
+        run: |
+          UV_PYTHON="$MAMBA_ROOT_PREFIX/envs/cil-env/bin/python"
+          uv venv --python "$UV_PYTHON" .venv
+          # CUDA wheels come from the PyTorch index
+          uv pip install --python .venv torch --index-url https://download.pytorch.org/whl/cu124
+          uv pip install --python .venv -e ".[dev]"
+
+      - name: Run GPU tests
+        run:
+          KRL_RUN_GPU_TESTS=1 .venv/bin/python -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py -v --tb=short

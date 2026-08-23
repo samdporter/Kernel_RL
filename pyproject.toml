@@ -1,18 +1,26 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "krl"
-version = "0.1.0"
-description = "Kernelised Richardson-Lucy deconvolution for PET image reconstruction"
+name = "cil-krl"
+version = "0.2.0"
+description = "Kernelised Richardson-Lucy deconvolution for PET with anatomical guidance, built as a CIL plugin"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "Kjell Erlandsson", email = "kjell.erlandsson@kcl.ac.uk"}
+    {name = "Kjell Erlandsson", email = "kjell.erlandsson@kcl.ac.uk"},
 ]
-keywords = ["PET", "deconvolution", "Richardson-Lucy", "medical imaging", "image reconstruction"]
+keywords = [
+    "PET",
+    "deconvolution",
+    "Richardson-Lucy",
+    "CIL",
+    "medical imaging",
+    "image reconstruction",
+    "kernel methods",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
@@ -20,39 +28,34 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
+# NOTE: CIL is a runtime requirement but is not pip-installable from PyPI.
+# Install CIL first (conda: `conda install -c conda-forge -c ccpi cil`),
+# then `pip install cil-krl`.
 dependencies = [
-    "numpy>=1.20",
-    "matplotlib>=3.3",
+    "numpy>=1.23",
     "scipy>=1.7",
     "nibabel>=3.0",
+    "numba>=0.55",
 ]
 
 [project.optional-dependencies]
-accelerators = [
-    "numba>=0.55",
+gpu = [
     "torch>=1.9",
 ]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=3.0",
-    "black>=22.0",
-    "flake8>=4.0",
-    "mypy>=0.950",
+    "ruff>=0.4",
 ]
 all = [
-    "krl[accelerators,dev]",
+    "cil-krl[gpu,dev]",
 ]
-
-[project.scripts]
-krl-deconv = "krl.cli.run_deconv:main"
-krl-compare = "krl.cli.run_comparison:main"
-krl-sweep = "krl.cli.run_sweeps:main"
 
 [project.urls]
 Homepage = "https://github.com/KCL-BMEIS/KRL"
@@ -71,16 +74,19 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-q --tb=short"
+markers = [
+    "gpu: tests requiring an NVIDIA GPU with CUDA (deselected by default)",
+]
 
-[tool.black]
-line-length = 100
-target-version = ['py38', 'py39', 'py310', 'py311']
-include = '\.pyi?$'
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["examples"]
 
-[tool.mypy]
-python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-ignore_missing_imports = true
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E402",  # torch-guarded imports in the GPU operator module
+    "F841",  # captured intermediate results in tests
+]

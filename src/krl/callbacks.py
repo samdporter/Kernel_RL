@@ -1,21 +1,10 @@
 """Callback utilities for KRL reconstruction algorithms."""
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
-
-try:
-    from cil.optimisation.utilities.callbacks import Callback
-    from cil.optimisation.algorithms import Algorithm
-except ImportError:
-    # Fallback for when CIL is not available
-    class Callback:
-        def __call__(self, algorithm):
-            pass
-
-    class Algorithm:
-        pass
+from cil.optimisation.algorithms import Algorithm
+from cil.optimisation.utilities.callbacks import Callback
 
 from krl.utils import get_array
 

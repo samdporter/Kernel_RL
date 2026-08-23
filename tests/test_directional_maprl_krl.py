@@ -1,53 +1,7 @@
 import importlib
-import sys
-import types
 
 import numpy as np
 import pytest
-
-
-def _ensure_cil_stubs():
-    """Provide lightweight stand-ins for CIL modules when unavailable."""
-    try:
-        import cil.framework  # type: ignore
-        import cil.optimisation.operators  # type: ignore
-        return
-    except ModuleNotFoundError:
-        pass
-
-    cil_pkg = sys.modules.get("cil")
-    if cil_pkg is None:
-        cil_pkg = types.ModuleType("cil")
-        cil_pkg.__path__ = []  # type: ignore[attr-defined]
-        sys.modules["cil"] = cil_pkg
-
-    framework = types.ModuleType("cil.framework")
-
-    class DummyBlockGeometry:
-        def __init__(self, *geometries):
-            self.components = geometries
-
-    framework.BlockGeometry = DummyBlockGeometry  # type: ignore[attr-defined]
-    sys.modules["cil.framework"] = framework
-    setattr(cil_pkg, "framework", framework)
-
-    optimisation_pkg = sys.modules.get("cil.optimisation")
-    if optimisation_pkg is None:
-        optimisation_pkg = types.ModuleType("cil.optimisation")
-        optimisation_pkg.__path__ = []  # type: ignore[attr-defined]
-        sys.modules["cil.optimisation"] = optimisation_pkg
-    setattr(cil_pkg, "optimisation", optimisation_pkg)
-
-    operators_module = types.ModuleType("cil.optimisation.operators")
-
-    class DummyLinearOperator:
-        def __init__(self, domain_geometry=None, range_geometry=None, **_):
-            self.domain_geometry = domain_geometry
-            self.range_geometry = range_geometry
-
-    operators_module.LinearOperator = DummyLinearOperator  # type: ignore[attr-defined]
-    sys.modules["cil.optimisation.operators"] = operators_module
-    setattr(optimisation_pkg, "operators", operators_module)
 
 
 class DummyImage:
@@ -176,7 +130,6 @@ class DummyBlock:
 
 @pytest.fixture(scope="module")
 def directional_module():
-    _ensure_cil_stubs()
     module = importlib.import_module("krl.operators.directional")
     return importlib.reload(module)
 

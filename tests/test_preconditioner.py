@@ -1,5 +1,6 @@
 """Tests for MAPRL preconditioner functionality."""
 import importlib
+
 import numpy as np
 import pytest
 
@@ -312,10 +313,10 @@ def test_parallel_sum_preconditioner(maprl_module):
 def _require_cil():
     """Helper to skip tests if CIL is not available."""
     try:
-        from cil.framework import ImageGeometry
-        from cil.optimisation.operators import GradientOperator
         import cil.optimisation.functions as fn
         import cil.optimisation.operators as op
+        from cil.framework import ImageGeometry
+        from cil.optimisation.operators import GradientOperator
         return ImageGeometry, GradientOperator, fn, op
     except ImportError as e:
         pytest.skip(f"CIL not available: {e}")
@@ -324,7 +325,7 @@ def _require_cil():
 def test_diagonal_hessian_monkey_patch():
     """Test diagonal Hessian monkey-patching with actual CIL functions."""
     ImageGeometry, GradientOperator, fn, op = _require_cil()
-    from src.krl.operators.directional import DirectionalOperator
+    from krl.operators.directional import DirectionalOperator
 
     # Create simple geometry and test image
     geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=1)
@@ -429,7 +430,7 @@ def test_maprl_armijo_update_periodic(maprl_module):
 def test_parallel_sum_with_cil_functions():
     """Test the full parallel-sum preconditioner with CIL functions."""
     ImageGeometry, GradientOperator, fn, op = _require_cil()
-    from src.krl.operators.directional import DirectionalOperator
+    from krl.operators.directional import DirectionalOperator
 
     # Create simple geometry and test image
     geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=1)

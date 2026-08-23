@@ -29,20 +29,8 @@ except (ImportError, OSError, AttributeError):
     torch = None  # type: ignore
     F = None  # type: ignore
 
-# Import base class - use relative imports to work both in development and installed
-try:
-    # Try relative import first (works when installed as package)
-    from .kernel_operator import BaseKernelOperator, DEFAULT_PARAMETERS, KernelOperator
-    from ..utils import get_array
-except ImportError:
-    # Fall back to absolute import (works in development)
-    import sys
-    from pathlib import Path
-    repo_root = Path(__file__).resolve().parents[3]
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-    from src.krl.operators.kernel_operator import BaseKernelOperator, DEFAULT_PARAMETERS, KernelOperator
-    from krl.utils import get_array
+from ..utils import get_array
+from .kernel_operator import BaseKernelOperator, KernelOperator
 
 
 class TorchKernelOperator(BaseKernelOperator):
@@ -616,8 +604,9 @@ class TorchKernelOperator(BaseKernelOperator):
             self._normalisation_map_gpu = None
             self._normalisation_map_cpu = None
 
-        # Fill output
-        out = image.clone()
+        # Fill output; clone the input (not the anatomical image) so the
+        # output dtype follows the data being transformed.
+        out = x.clone()
         out.fill(res)
 
         if use_mask:
@@ -773,7 +762,6 @@ class TorchKernelOperator(BaseKernelOperator):
         """
         s0, s1, s2 = x_arr.shape
         half = n // 2
-        total = n ** 3
         sig2_an = 2.0 * sigma_anat * sigma_anat
         sig2_em = 2.0 * sigma_emission * sigma_emission
         dist2_an = 2.0 * sigma_dist * sigma_dist

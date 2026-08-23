@@ -94,7 +94,7 @@ def test_hybrid_kernel_updates_without_freeze(geometry, anatomical_image, emissi
     operator.set_anatomical_image(anatomical_image)
 
     # Ensure not frozen
-    assert operator.freeze_emission_kernel == False
+    assert operator.freeze_emission_kernel is False
     assert operator.frozen_emission_kernel is None
 
     # First forward pass with emission_v1

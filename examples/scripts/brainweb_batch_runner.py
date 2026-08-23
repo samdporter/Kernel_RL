@@ -10,7 +10,7 @@ try:
 except Exception:
     yaml = None
 
-from krl.utils import prepare_brainweb_pet_dataset
+from examples.data.brainweb_phantoms import prepare_brainweb_pet_dataset
 
 
 # ------------------------------ Scenario runners -----------------------------

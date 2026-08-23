@@ -1,8 +1,9 @@
+# --- Numba implementations for CPU acceleration ---
+import numba
 import numpy as np
 from cil.optimisation.operators import LinearOperator
 
-# --- Numba implementations for CPU acceleration ---
-import numba
+
 @numba.jit(nopython=True, parallel=True)
 def _numba_convolve_3d(x, psf):
     D, H, W = x.shape
@@ -53,15 +54,21 @@ class GaussianBlurringOperator(LinearOperator):
         if backend == 'torch':
             import torch
             self.torch = torch
-            if not torch.cuda.is_available():
-                raise RuntimeError(
-                    "Torch backend selected but no CUDA GPUs available. "
-                    "Use backend='auto', 'numba', or 'scipy' instead."
-                )
-            self.psf_t = torch.tensor(self.psf,
-                                      dtype=torch.float32
-                                    ).unsqueeze(0).unsqueeze(0).cuda()
+            self.device = self._resolve_device()
+            self.psf_t = torch.tensor(
+                self.psf, dtype=torch.float32,
+            ).unsqueeze(0).unsqueeze(0).to(self.device)
         # numba & scipy need no extra storage
+
+    @staticmethod
+    def _resolve_device():
+        import torch
+        if torch.cuda.is_available():
+            return 'cuda'
+        mps = getattr(torch.backends, 'mps', None)
+        if mps is not None and torch.backends.mps.is_available():
+            return 'mps'
+        return 'cpu'
 
     @staticmethod
     def _make_psf(sigma, sd=3):
@@ -76,7 +83,7 @@ class GaussianBlurringOperator(LinearOperator):
         if   self.backend == 'torch':
             F = self.torch.nn.functional
             t = self.torch.tensor(arr, dtype=self.torch.float32
-                                  ).unsqueeze(0).unsqueeze(0).cuda()
+                                  ).unsqueeze(0).unsqueeze(0).to(self.device)
             kd,kh,kw = self.psf.shape
             blurred = F.conv3d(t, self.psf_t,
                                padding=(kd//2,kh//2,kw//2)
@@ -98,7 +105,7 @@ class GaussianBlurringOperator(LinearOperator):
         if   self.backend == 'torch':
             F = self.torch.nn.functional
             t = self.torch.tensor(arr, dtype=self.torch.float32
-                                  ).unsqueeze(0).unsqueeze(0).cuda()
+                                  ).unsqueeze(0).unsqueeze(0).to(self.device)
             psf_flip = self.psf_t.flip(-1).flip(-2).flip(-3)
             kd,kh,kw = self.psf.shape
             result = F.conv3d(t, psf_flip,
@@ -117,10 +124,10 @@ class GaussianBlurringOperator(LinearOperator):
             out = x.clone()
         out.fill(result)
         return out
-    
+
     def clear_gpu(self):
         """Release any cached GPU memory."""
-        if self.backend == 'torch':
+        if self.backend == 'torch' and self.device == 'cuda':
             # free PyTorch’s CUDA cache
             self.torch.cuda.empty_cache()
 

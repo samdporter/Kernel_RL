@@ -4,10 +4,22 @@ These tests confirm both fallback behavior (when CUDA is unavailable) and
 GPU preference (when CUDA is available) for the Gaussian blurring and kernel
 operators.
 """
+import os
+
 import pytest
-import numpy as np
+
+# Importing torch alongside CIL's native libraries breaks OpenMP on some
+# platforms, so torch-touching tests are opt-in via this environment variable.
+if not os.environ.get("KRL_RUN_GPU_TESTS"):
+    pytest.skip(
+        "GPU tests disabled; set KRL_RUN_GPU_TESTS=1 to run them",
+        allow_module_level=True,
+    )
+
 from dataclasses import dataclass
 from typing import Tuple
+
+import numpy as np
 
 
 def _cuda_available() -> bool:

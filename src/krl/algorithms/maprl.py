@@ -1,6 +1,8 @@
 import logging
 import os
+
 import numpy as np
+from cil.optimisation.algorithms import Algorithm
 
 LOGGER = logging.getLogger(__name__)
 if not LOGGER.handlers:
@@ -17,24 +19,6 @@ else:
     except AttributeError:
         LOGGER.setLevel(logging.INFO)
 LOGGER.propagate = False
-
-try:
-    from cil.optimisation.algorithms import Algorithm
-except ImportError:
-    # Fallback for testing or when CIL is not available
-    class Algorithm:
-        def __init__(self, **kwargs):
-            self.iteration = 0
-            self.loss = []
-            self.configured = False
-
-        def run(self, iterations, verbose=0, callbacks=None):
-            for i in range(iterations):
-                self.iteration = i + 1
-                self.update()
-                if callbacks:
-                    for cb in callbacks:
-                        cb(self)
 
 class MAPRL(Algorithm):
     def __init__(

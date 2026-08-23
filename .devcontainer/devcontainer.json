@@ -1,6 +1,6 @@
 {
   "name": "KRL Development",
-  "dockerComposeFile": "../docker-compose.yml",
+  "dockerComposeFile": "../examples/docker-compose.yml",
   "service": "krl",
   "workspaceFolder": "/workspace",
 

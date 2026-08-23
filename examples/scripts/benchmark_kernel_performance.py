@@ -89,7 +89,7 @@ def time_kernel_operations(backend, shape=(64, 64, 64), n=7, k=48,
         Timing and memory statistics
     """
     from krl.utils import get_array
-    from src.krl.operators.kernel_operator import get_kernel_operator
+    from krl.operators.kernel_operator import get_kernel_operator
 
     # Convert dtype string to numpy dtype
     np_dtype = np.float32 if dtype == 'float32' else np.float64

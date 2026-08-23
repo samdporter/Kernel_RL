@@ -1,11 +1,6 @@
-# Documentation
+# cil-krl documentation
 
-## Guides
+- [Methods](METHODS.md) — the RL, KRL, HKRL and DTV methods explained
+- [Reference notes](reference/) — historical design notes (SIRF vs CIL, quickstart)
 
-- **[Getting Started](GETTING-STARTED.md)** - Install and run
-- **[Methods](METHODS.md)** - RL, KRL, HKRL, DTV explained
-- **[Docker](../docker/README.md)** - Docker commands
-
-## Reference
-
-- **[reference/](reference/)** - Original notes (archived)
+For installation and usage see the top-level [README](../README.md).

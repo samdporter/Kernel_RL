@@ -1,10 +1,11 @@
 import ctypes
 import importlib
 import importlib.util
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
-from pathlib import Path
-import sys
 
 
 class DummyImage:
@@ -536,8 +537,10 @@ def test_maprl_armijo_iterations_perform_line_search(maprl_module):
         if i <= 3:
             # During Armijo iterations, we expect multiple evaluations (line search)
             # At minimum: reference loss + at least one candidate
-            assert eval_calls_after - eval_calls_before >= 2, \
-                f"Iteration {i}: Expected multiple loss evaluations during Armijo search, got {eval_calls_after - eval_calls_before}"
+            assert eval_calls_after - eval_calls_before >= 2, (
+                f"Iteration {i}: expected multiple loss evaluations "
+                f"during Armijo search, got {eval_calls_after - eval_calls_before}"
+            )
             # Step size should be found by Armijo (likely smaller than initial_step)
             # and should stay constant within the Armijo window
             assert step_after == maprl._current_step_size

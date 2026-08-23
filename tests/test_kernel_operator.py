@@ -5,8 +5,7 @@ from typing import Tuple
 import numpy as np
 import pytest
 
-from src.krl.operators.kernel_operator import (
-    DEFAULT_PARAMETERS,
+from krl.operators.kernel_operator import (
     NUMBA_AVAIL,
     KernelOperator,
     get_kernel_operator,
@@ -120,6 +119,37 @@ def test_smoothing_effect(anatomical_uniform, emission_spike, geometry, backend)
     result_arr = result.as_array()
     assert result_arr.max() < emission_spike.as_array().max()
     assert np.var(result_arr) < np.var(emission_spike.as_array())
+
+
+@pytest.mark.parametrize("backend", available_backends())
+def test_adjoint_dot_product_float64_data_with_float32_anatomy(geometry, backend):
+    """Regression: forward output must follow the input dtype, not the
+    anatomical image's. A float32 anatomy previously truncated the forward
+    result to float32, breaking adjointness against float64 data."""
+    operator = get_kernel_operator(
+        geometry,
+        backend=backend,
+        num_neighbours=3,
+        sigma_anat=0.4,
+        normalize_kernel=True,
+        normalize_features=False,
+        use_mask=True,
+        mask_k=10,
+    )
+    anatomy_f32 = geometry.allocate(0.0)
+    anatomy_f32.fill(np.random.default_rng(3).normal(size=geometry.shape).astype(np.float32))
+    operator.set_anatomical_image(anatomy_f32)
+
+    rng = np.random.default_rng(5)
+    x = DummyImage(rng.normal(size=geometry.shape))  # float64
+    y = DummyImage(rng.normal(size=geometry.shape))
+
+    forward = operator.direct(x).as_array()
+    assert forward.dtype == np.float64
+
+    dot_forward = float(np.sum(forward * y.as_array()))
+    dot_adjoint = float(np.sum(x.as_array() * operator.adjoint(y).as_array()))
+    assert np.isclose(dot_forward, dot_adjoint, atol=1e-10, rtol=1e-8)
 
 
 @pytest.mark.parametrize("backend", available_backends())

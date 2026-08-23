@@ -1,13 +1,7 @@
 import numpy as np
+from cil.optimisation.operators import LinearOperator
 
-try:
-    from cil.optimisation.operators import LinearOperator
-except (ImportError, OSError):  # pragma: no cover - optional dependency
-    class LinearOperator:  # type: ignore[override]
-        def __init__(self, *args, **kwargs) -> None:
-            self.__dict__.update(kwargs)
-
-from krl.utils import get_array  # noqa: E402
+from krl.utils import get_array
 
 # Try importing numba
 try:
@@ -76,7 +70,7 @@ def get_kernel_operator(domain_geometry, backend="auto", **kwargs):
                         backend = 'torch'
                         break
                 elif b == 'numba':
-                    import numba
+                    import numba  # noqa: F401
                     backend = 'numba'
                     break
             except ImportError:
@@ -328,13 +322,14 @@ if NUMBA_AVAIL:
                     hybrid,
                 )
 
-            out = image.clone()
+            # Clone the input (not the anatomical image) so the output dtype
+            # follows the data being transformed.
+            out = x.clone()
             out.fill(res)
             self._normalisation_map = norm_arr if normalize_kernel else None
             return out
 
         def adjoint(self, x, out=None):
-            arr = get_array(self.anatomical_image)
             x_arr = get_array(x)
             p = self.parameters
             norm_arr = (
@@ -713,7 +708,9 @@ if NUMBA_AVAIL:
         return out
 
 
-    @numba.njit(cache=True, parallel=True)
+    # NOTE: scatter-style adjoint kernels must stay serial — the outer prange
+    # would race on out[ii, jj, kk] += and silently drop contributions.
+    @numba.njit(cache=True)
     def _nb_adjoint(
         x_arr,
         ref_arr,
@@ -808,7 +805,6 @@ if NUMBA_AVAIL:
         """
         s0, s1, s2 = x_arr.shape
         half = n // 2
-        total = n ** 3
         sig2_em = 2.0 * sigma_emission * sigma_emission
 
         out = np.empty_like(x_arr, dtype=np.float64)
@@ -945,7 +941,7 @@ if NUMBA_AVAIL:
         return out
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True)
     def _nb_adjoint_precomputed(
         x_arr,
         ref_arr,
@@ -1009,7 +1005,7 @@ if NUMBA_AVAIL:
         return out
 
 
-    @numba.njit(cache=True, parallel=True, fastmath=True)
+    @numba.njit(cache=True)
     def _nb_adjoint_precomputed_sparse(
         x_arr,
         ref_arr,

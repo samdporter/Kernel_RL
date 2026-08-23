@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
-"""CLI entry point for running PET deconvolution experiments."""
+"""CLI entry point for running PET deconvolution experiments.
+
+Research pipeline example. Requires the cil-krl package to be installed
+(`pip install -e .` in a checkout, or `pip install cil-krl`) plus CIL.
+"""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from typing import Dict, Iterable, Mapping, Tuple
 
 import logging
@@ -26,7 +36,7 @@ except ImportError as e:
         "  conda install -c conda-forge -c ccpi cil"
     ) from e
 
-from krl.cli.config import (
+from examples.pipelines.config import (
     KernelParameters,
     PipelineConfig,
     configure_matplotlib,

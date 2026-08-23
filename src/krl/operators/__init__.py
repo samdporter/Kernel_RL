@@ -1,14 +1,13 @@
 """Operators for KRL deconvolution."""
 
-from krl.operators.kernel_operator import (
-    get_kernel_operator,
-    KernelOperator,
-    BaseKernelOperator,
-    DEFAULT_PARAMETERS,
-)
 from krl.operators.blurring import GaussianBlurringOperator, create_gaussian_blur
-from krl.operators.gradient import Gradient
 from krl.operators.directional import DirectionalOperator
+from krl.operators.kernel_operator import (
+    DEFAULT_PARAMETERS,
+    BaseKernelOperator,
+    KernelOperator,
+    get_kernel_operator,
+)
 
 __all__ = [
     "get_kernel_operator",
@@ -17,6 +16,5 @@ __all__ = [
     "DEFAULT_PARAMETERS",
     "GaussianBlurringOperator",
     "create_gaussian_blur",
-    "Gradient",
     "DirectionalOperator",
 ]
