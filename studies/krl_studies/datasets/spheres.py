@@ -24,12 +24,9 @@ class SphereDataset:
 
     def __post_init__(self):
         self.root = Path(self.root)
-        missing = [name for name, fname in _REQUIRED.items() if not (self.root / fname).exists()]
+        missing = [fname for fname in _REQUIRED.values() if not (self.root / fname).exists()]
         if missing:
-            raise FileNotFoundError(
-                f"{self.root} is missing spheres files for: {missing}; "
-                "expected phant_orig.nii, phant_mri.nii, phant_pet.nii"
-            )
+            raise FileNotFoundError(f"{self.root} is missing spheres files: {missing}")
 
     def _load(self, fname: str) -> np.ndarray:
         nii = nib.load(str(self.root / fname))
@@ -64,10 +61,14 @@ def quick_sim(
 ) -> np.ndarray:
     """Deterministic image-space surrogate for the SIRF simulation (Plan 2).
 
+    gt must be non-negative (emission image).
+
     Gaussian blur with the given FWHM followed by Poisson noise scaled so that
     `counts` is the total expected count level. Same (gt, fwhm, counts,
     realisation, seed) => identical output.
     """
+    if counts <= 0:
+        raise ValueError(f"counts must be positive, got {counts}")
     sigma_vox = [(fwhm_mm * FWHM_TO_SIGMA) / v for v in voxel_mm]
     blurred = gaussian_filter(gt.astype(np.float64), sigma=sigma_vox, mode="constant", cval=0.0)
     scale = counts / max(float(blurred.sum()), 1e-12)

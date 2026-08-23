@@ -5,13 +5,13 @@ from krl_studies.datasets.spheres import SphereDataset, quick_sim
 
 
 @pytest.fixture(scope="module")
-def spheres_dir(tmp_path_factory, rng):
+def spheres_dir(tmp_path_factory):
     """Tiny stand-in phantom with the three canonical files."""
     from conftest import write_test_nifti
 
     d = tmp_path_factory.mktemp("spheres")
     gt = np.zeros((40, 60, 60), dtype=np.float32)
-    gt[10:30, 25:35, 25:35] = 8.0
+    gt[10:30, 25:35, 25:37] = 8.0
     gt += 1.0
     mr = np.full((40, 60, 60), 0.5, dtype=np.float32)
     write_test_nifti(d / "phant_orig.nii", gt)
@@ -26,6 +26,7 @@ def test_dataset_loads_images_and_geometry(spheres_dir):
     assert ds.guidance.shape == (40, 60, 60)
     assert ds.reference_pet.shape == (40, 60, 60)
     assert ds.voxel_mm == pytest.approx((1.0, 1.0, 1.0))
+    assert np.allclose(ds.reference_pet, ds.ground_truth * 0.9)
 
 
 def test_dataset_requires_files(tmp_path):
