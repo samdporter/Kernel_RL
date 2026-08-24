@@ -73,13 +73,14 @@ def _load_attenuation(
     scanner_shape,
     scanner_voxel_mm,
 ):
-    """Load a uMap NIfTI, resample it onto the scanner grid, wrap as ImageData."""
+    """Load a uMap NIfTI, resample it, and build its acquisition ASM."""
     nii = nib.load(str(attenuation_path))
     sizes = nib.affines.voxel_sizes(nii.affine)
     source_voxel_mm = (float(sizes[2]), float(sizes[1]), float(sizes[0]))
     umap_arr = np.transpose(nii.get_fdata().astype(np.float32), (2, 1, 0))
     umap_scanner, _ = resample_to_fov_zyx(umap_arr, source_voxel_mm, scanner_shape, scanner_voxel_mm)
-    return _api.make_image(acq_template, umap_scanner)
+    umap_image = _api.make_image(acq_template, umap_scanner)
+    return _api.make_acquisition_sensitivity(umap_image, acq_template)
 
 
 def simulate_inputs(gt_array, cfg_dict):
@@ -144,8 +145,9 @@ def simulate_inputs(gt_array, cfg_dict):
 
     # Calibrated route: the condition's target residual IS the true blur,
     # applied as a pre-blur before a clean acquisition model. Recon-side
-    # processors are not adjoint-correct in this SIRF build and reduce
-    # recovery instead of sharpening (docs/reference/SIRF_API_NOTES.md).
+    # processors are adjoint-consistent, but the reduced, near-noiseless
+    # calibration regime recovers less well with an embedded processor
+    # (docs/reference/SIRF_API_NOTES.md).
     gt_blurred = _api.gaussian_smooth_image(gt_image, spec.forward_model_fwhm_xyz)
     forward_am = _api.make_acquisition_model(acq, gt_image, attenuation=attenuation)
     prompts = _api.forward_project(gt_blurred, forward_am)

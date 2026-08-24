@@ -99,7 +99,8 @@ def test_simulate_inputs_shapes_and_determinism():
 
     assert meta_a == meta_b
     # psf-matched: the condition's target residual IS the applied blur
-    # (calibrated pre-blur route; recon-side processors disabled in this build).
+    # (calibrated pre-blur route; recon-side processors are available but not
+    # used for these conditions).
     assert meta_a["forward_model_fwhm"] == (4.5, 4.5, 6.4)
     assert meta_a["target_residual_fwhm"] == (4.5, 4.5, 6.4)
     assert meta_a["recon_model_fwhm"] is None
@@ -108,6 +109,31 @@ def test_simulate_inputs_shapes_and_determinism():
     assert len(meta_a["scanner_shape"]) == 3
     assert all(v > 0 for v in meta_a["scanner_voxel_mm"])
     assert meta_a["seed"] == 1337
+
+
+def test_simulate_inputs_accepts_attenuation_path(tmp_path):
+    import nibabel as nib
+
+    from krl_studies.simulation import simulate_inputs
+
+    attenuation_path = tmp_path / "mu_map.nii.gz"
+    mu_map = np.full((32, 32, 32), 0.01, dtype=np.float32)
+    _, y, x = np.indices(mu_map.shape)
+    mu_map[((x - 16) ** 2 + (y - 16) ** 2) < 8**2] = 0.096
+    nib.save(nib.Nifti1Image(mu_map, np.eye(4)), str(attenuation_path))
+
+    gt = np.ones((32, 32, 32), dtype=np.float32)
+    cfg = _sim_cfg(counts=1e6, n_subits=1)
+    baseline, _ = simulate_inputs(gt, dict(cfg))
+    cfg["attenuation_path"] = attenuation_path
+    recon, meta = simulate_inputs(
+        gt,
+        cfg,
+    )
+    assert recon.shape == gt.shape
+    assert np.isfinite(recon).all()
+    assert not np.array_equal(recon, baseline)
+    assert meta["input_shape"] == gt.shape
 
 
 def test_simulate_inputs_metadata_tracks_condition_models():
@@ -156,19 +182,22 @@ def test_make_acquisition_model_resolution_and_attenuation_support():
     # and attenuating when applied directly (verified physically against a
     # water cylinder; see docs/reference/SIRF_API_NOTES.md).
     asm = _api.make_acquisition_sensitivity(uMap, acq)
-    ones_sino = acq.copy()
-    ones_sino.fill(1.0)
+    ones_sino = acq.get_uniform_copy(1.0)
     factors = np.asarray(asm.forward(ones_sino).as_array())
     assert np.isfinite(factors).all()
     assert (factors > 0).all() and (factors <= 1.0 + 1e-6).all()
 
-    import pytest
-
-    # Attachment path is defective in the pinned digest build: forwarding
-    # through an AM with the ASM attached collapses to ~zero irrespective of
-    # mu content. The gateway refuses rather than producing wrong counts.
-    with pytest.raises(RuntimeError, match="attenuation"):
-        make_acquisition_model(acq, image, attenuation=asm)
+    attenuated_am = make_acquisition_model(acq, image, attenuation=asm)
+    attenuated = forward_project(image, attenuated_am)
+    expected = asm.forward(plain)
+    assert np.isfinite(np.asarray(attenuated.as_array())).all()
+    np.testing.assert_allclose(
+        np.asarray(attenuated.as_array()),
+        np.asarray(expected.as_array()),
+        rtol=1e-5,
+        atol=1e-4,
+    )
+    assert float(np.asarray(attenuated.as_array()).sum()) < float(np.asarray(plain.as_array()).sum())
 
 
 def test_resolution_calibration_orders_measured_conditions(tmp_path):

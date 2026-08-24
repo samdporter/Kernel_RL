@@ -28,10 +28,10 @@ CONDITION_SPECS = {
     # Conditions are realised by pre-blurring the ground truth to the
     # condition's target residual before a CLEAN acquisition model: attaching
     # a Gaussian image-data processor to the reconstruction AM reduces central
-    # recovery instead of sharpening it in the pinned SIRF build (adjoint of
-    # the processor is not honoured inside OSMAPOSL; see
+    # recovery in the reduced, near-noiseless calibration regime even though
+    # the composed model is adjoint-consistent (see
     # docs/reference/SIRF_API_NOTES.md). recon_model_fwhm_xyz therefore stays
-    # None until a build supports adjoint-correct processors.
+    # None until the conditions are calibrated on realistic noisy grids.
     "psf-none": ResolutionCondition(
         "psf-none", _PSF_NONE, _PSF_NONE, None
     ),

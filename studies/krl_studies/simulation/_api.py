@@ -98,17 +98,20 @@ def scanner_grid(acq_template) -> tuple[tuple[int, int, int], tuple[float, float
 def make_acquisition_sensitivity(umap_image, acq_template):
     """AcquisitionSensitivityModel from a mu-map ImageData (units 1/cm).
 
-    Documented route (sirf.STIR.AcquisitionSensitivityModel): the second
-    argument is the ray-tracing acquisition model used to integrate the
-    mu-map into bin efficiencies. The returned ASM's own ``forward`` applies
-    the attenuation factors correctly in this build.
+    SIRF's documented PET example materialises the attenuation factors before
+    reconstruction. Keep the tracing model separate from emission models, then
+    return an AcquisitionData-backed ASM to avoid STIR's attenuation-image
+    geometry limitation during objective setup.
     """
     st, _ = _sirf()
     am_for_tracing = st.AcquisitionModelUsingRayTracingMatrix()
     am_for_tracing.set_up(acq_template, umap_image)
-    asm = st.AcquisitionSensitivityModel(umap_image, am_for_tracing)
-    asm.set_up(acq_template)
-    return asm
+    image_asm = st.AcquisitionSensitivityModel(umap_image, am_for_tracing)
+    image_asm.set_up(acq_template)
+    factors = image_asm.forward(acq_template.get_uniform_copy(1.0))
+    factor_asm = st.AcquisitionSensitivityModel(factors)
+    factor_asm.set_up(acq_template)
+    return factor_asm
 
 
 def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuation=None):
@@ -121,12 +124,8 @@ def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuatio
     reconstruction of identically blurred data, so psf conditions are NOT
     realised through P (see simulate_inputs and docs/reference/SIRF_API_NOTES.md).
 
-    attenuation accepts a ready-built AcquisitionSensitivityModel (see
-    make_acquisition_sensitivity). CAVEAT verified in the pinned digest:
-    once an ASM is attached, AcquisitionModel.forward returns near-zero data
-    irrespective of the mu-map content, while the ASM's own forward applies
-    the same factors correctly — so attenuation stays config-gated and this
-    function raises rather than silently producing wrong counts.
+    attenuation accepts a ready-built AcquisitionSensitivityModel from
+    make_acquisition_sensitivity and is attached after the model is set up.
     """
     st, _ = _sirf()
     am = st.AcquisitionModelUsingRayTracingMatrix()
@@ -137,11 +136,7 @@ def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuatio
         processor.set_fwhms((fz, fy, fx))
         am.set_image_data_processor(processor)
     if attenuation is not None:
-        raise RuntimeError(
-            "attenuation via set_acquisition_sensitivity produces degenerate "
-            "forward projections in this SIRF build; see "
-            "docs/reference/SIRF_API_NOTES.md before enabling"
-        )
+        am.set_acquisition_sensitivity(attenuation)
     return am
 
 

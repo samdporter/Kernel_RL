@@ -120,20 +120,25 @@ Plan 3 update: `make_acquisition_model(acq, image, resolution_fwhm=...)` calls
 `set_up` FIRST and attaches the processor afterwards — verified working in the
 pinned digest build (blur changes forward projections as expected).
 
-Attenuation (Plan 3 re-investigation, corrected): the documented route IS
+Attenuation (Plan 3 re-investigation, corrected): the documented route is
 available — `AcquisitionSensitivityModel(mu_map_ImageData, acq_model)` with
-mu in 1/cm, `asm.set_up(acq_data)`, then
-`am.set_acquisition_sensitivity(asm)`. Verified on the reduced mMR template:
-the ASM's own factors are physically correct (`asm.forward(ones)` gives
-min 0.377 / mean 0.613 for a 10 cm water cylinder, matching exp(-0.96)).
-HOWEVER, once attached via `set_acquisition_sensitivity`, this pinned build's
-`AcquisitionModel.forward` returns near-zero data INDEPENDENT of mu-map
-content (sum ratio ~2e-5 whether mu is water, water/10, or water/40), while
-the same ASM applied directly behaves correctly — a defect isolated to the
-attachment path of `cSTIR_acquisitionModelFwd`. Consequence:
-`make_acquisition_model(attenuation=...)` raises with a pointer to these
-notes; uMap support stays config-gated until a newer image digest passes the
-attached-path check in `test_make_acquisition_model_resolution_and_attenuation_support`.
+mu in 1/cm and `asm.set_up(acq_data)`. SIRF issue #623 records a STIR
+geometry limitation for using an image-backed ASM during reconstruction and
+shows the supported workaround: apply the image-backed ASM to an all-ones
+acquisition, then construct a new `AcquisitionSensitivityModel` from those
+acquisition-data factors. The gateway follows that route and keeps the
+tracing AM separate from emission AMs.
+
+On the reduced mMR template, the factor ASM is finite and attenuating (a
+10 cm water cylinder gives min 0.377 / mean 0.613, matching exp(-0.96)).
+Attaching the factor ASM to a set-up ray-tracing AM matches manual `S G`
+within numerical tolerance and one-subiteration OSEM produces finite output.
+The earlier near-zero attachment result was not reproducible with the
+documented route; controlled comparison showed that reusing the emission AM
+to construct the attenuation ASM produces NaNs, while omitting `asm.set_up`
+raises the explicit STIR setup error. `make_acquisition_model(attenuation=...)`
+therefore attaches only a ready-built factor ASM, and `simulate_inputs`
+converts a resampled NIfTI uMap through this helper.
 
 Resolution processor (corrected understanding): the adjoint of the composed
 model L = S G P is numerically consistent (<P-model inner-product error 5e-8),
