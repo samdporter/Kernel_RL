@@ -151,18 +151,24 @@ def test_make_acquisition_model_resolution_and_attenuation_support():
 
     shape = np.asarray(image.as_array()).shape
     uMap = _api.make_image(acq, np.full(shape, 0.01, dtype=np.float32))
-    setter = getattr(_api._sirf()[0].AcquisitionModelUsingRayTracingMatrix(), "set_attenuation_image", None)
-    if setter is None:
-        import pytest
 
-        # Calibrated build fact: no attenuation-image support; requesting a
-        # uMap must raise, never silently drop it.
-        with pytest.raises(RuntimeError, match="attenuation"):
-            make_acquisition_model(acq, image, attenuation=uMap)
-    else:
-        att_am = make_acquisition_model(acq, image, attenuation=uMap)
-        attenuated = forward_project(image, att_am)
-        assert float(np.asarray(attenuated.as_array()).sum()) < float(np.asarray(plain.as_array()).sum())
+    # Documented ASM route: factors computed from the mu-map must be finite
+    # and attenuating when applied directly (verified physically against a
+    # water cylinder; see docs/reference/SIRF_API_NOTES.md).
+    asm = _api.make_acquisition_sensitivity(uMap, acq)
+    ones_sino = acq.copy()
+    ones_sino.fill(1.0)
+    factors = np.asarray(asm.forward(ones_sino).as_array())
+    assert np.isfinite(factors).all()
+    assert (factors > 0).all() and (factors <= 1.0 + 1e-6).all()
+
+    import pytest
+
+    # Attachment path is defective in the pinned digest build: forwarding
+    # through an AM with the ASM attached collapses to ~zero irrespective of
+    # mu content. The gateway refuses rather than producing wrong counts.
+    with pytest.raises(RuntimeError, match="attenuation"):
+        make_acquisition_model(acq, image, attenuation=asm)
 
 
 def test_resolution_calibration_orders_measured_conditions(tmp_path):

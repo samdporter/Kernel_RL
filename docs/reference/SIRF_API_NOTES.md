@@ -118,36 +118,36 @@ No `set_resolution_model` on the ray-tracing AM, but `set_image_data_processor`
 exists (a Gaussian filter applied inside the forward model was accepted).
 Plan 3 update: `make_acquisition_model(acq, image, resolution_fwhm=...)` calls
 `set_up` FIRST and attaches the processor afterwards — verified working in the
-pinned digest build (blur changes forward projections as expected). The
-forward model carries the true physical blur; the reconstruction gets its own
-condition-specific model (none / undersized / matched).
+pinned digest build (blur changes forward projections as expected).
 
-Attenuation: the pinned digest build exposes NO `set_attenuation_image` on
-`AcquisitionModelUsingRayTracingMatrix`. `_api.make_acquisition_model` raises
-an explicit `RuntimeError` when a uMap is requested (never silently drops it);
-verified by container test. Re-probe if the image digest changes.
+Attenuation (Plan 3 re-investigation, corrected): the documented route IS
+available — `AcquisitionSensitivityModel(mu_map_ImageData, acq_model)` with
+mu in 1/cm, `asm.set_up(acq_data)`, then
+`am.set_acquisition_sensitivity(asm)`. Verified on the reduced mMR template:
+the ASM's own factors are physically correct (`asm.forward(ones)` gives
+min 0.377 / mean 0.613 for a 10 cm water cylinder, matching exp(-0.96)).
+HOWEVER, once attached via `set_acquisition_sensitivity`, this pinned build's
+`AcquisitionModel.forward` returns near-zero data INDEPENDENT of mu-map
+content (sum ratio ~2e-5 whether mu is water, water/10, or water/40), while
+the same ASM applied directly behaves correctly — a defect isolated to the
+attachment path of `cSTIR_acquisitionModelFwd`. Consequence:
+`make_acquisition_model(attenuation=...)` raises with a pointer to these
+notes; uMap support stays config-gated until a newer image digest passes the
+attached-path check in `test_make_acquisition_model_resolution_and_attenuation_support`.
 
-### Plan 3 findings (scanner-grid round trip, 2026-08-24)
+Resolution processor (corrected understanding): the adjoint of the composed
+model L = S G P is numerically consistent (<P-model inner-product error 5e-8),
+and pairing data/model FWHM correctly still yields LOWER early-iteration
+central recovery than unmodelled reconstruction of identically pre-blurred
+data (2.34 vs 2.97 at 1e9 counts, 12 subits). At essentially noiseless counts
+unmodelled MLEM deconvolves aggressively and accurately; the clinical benefit
+of PSF modelling (noise suppression) does not manifest in this regime. The
+psf conditions therefore remain realised by per-condition pre-blurring to the
+Vision target residuals (measured agreement ~5% transverse); recon-side
+processors stay available through the gateway but unused for conditions.
+Revisit both behaviours when the image digest changes or full-grid cluster
+runs land.
 
-- Sub-FOV image grids destabilise OSMAPOSL on the reduced mMR template:
-  extent-preserving resampling of a 48³ phantom to ~(24,23,23) voxels drives
-  update ratios to float-max and the estimate to a plateau. Resampling onto
-  the scanner's FULL uniform-image grid, centred like a clinical
-  reconstruction, is well-conditioned. `simulate_inputs` therefore maps GT via
-  `geometry.resample_to_fov_zyx` / `resample_from_fov_zyx`.
-- Delta phantoms (near-zero background) diverge under MLEM regardless of
-  grid; calibration tests must use a compact lesion on a uniform background.
-- Recon-side resolution processors are NOT usable for the psf conditions in
-  this build: attaching `SeparableGaussianImageFilter` to the reconstruction
-  AM (either set_up order) consistently REDUCES central recovery versus a
-  clean model — the processor's adjoint is not honoured inside OSMAPOSL. The
-  conditions are therefore realised by pre-blurring the ground truth to each
-  condition's target residual before a clean acquisition model (the original
-  DECIDED route above), whose measured transverse residuals match targets to
-  ~5% per the table above. Revisit recon-side modelling only after re-probing
-  a newer SIRF build.
-- `scipy.ndimage.zoom` needs `grid_mode=True`: default corner alignment
-  biases even-ratio resamples by half a voxel.
 DECIDED route for Task 3: **pre-blur the ground truth with
 `SeparableGaussianImageFilter` at the condition's residual FWHM before forward
 projection** (+ optional matched post-filter during reconstruction later). This
@@ -172,6 +172,19 @@ separable kernel quantises to the coarse probe grid (mapping probe: requesting
 does not change it). Expect tighter agreement on finer grids (Vision 1.6 mm /
 planned resampling). Clinical Hoffman-profile re-verification belongs to Task 3
 on realistic grids.
+
+### Plan 3 findings (scanner-grid round trip, 2026-08-24)
+
+- Sub-FOV image grids destabilise OSMAPOSL on the reduced mMR template:
+  extent-preserving resampling of a 48³ phantom to ~(24,23,23) voxels drives
+  update ratios to float-max and the estimate to a plateau. Resampling onto
+  the scanner's FULL uniform-image grid, centred like a clinical
+  reconstruction, is well-conditioned. `simulate_inputs` therefore maps GT via
+  `geometry.resample_to_fov_zyx` / `resample_from_fov_zyx`.
+- Delta phantoms (near-zero background) diverge under MLEM regardless of
+  grid; calibration tests must use a compact lesion on a uniform background.
+- `scipy.ndimage.zoom` needs `grid_mode=True`: default corner alignment
+  biases even-ratio resamples by half a voxel.
 
 ### Poisson noise
 

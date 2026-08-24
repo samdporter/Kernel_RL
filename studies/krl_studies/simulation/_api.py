@@ -95,13 +95,38 @@ def scanner_grid(acq_template) -> tuple[tuple[int, int, int], tuple[float, float
     return shape, image_voxel_sizes(image)
 
 
-def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuation=None):
-    """Ray-tracing acquisition model with optional in-model blur and uMap.
+def make_acquisition_sensitivity(umap_image, acq_template):
+    """AcquisitionSensitivityModel from a mu-map ImageData (units 1/cm).
 
-    resolution_fwhm is an (fx, fy, fz) mm tuple applied inside the forward
-    model via a separable Gaussian image-data processor. attenuation is an
-    optional uMap ImageData; requesting it on a build without attenuation
-    support raises instead of silently dropping it.
+    Documented route (sirf.STIR.AcquisitionSensitivityModel): the second
+    argument is the ray-tracing acquisition model used to integrate the
+    mu-map into bin efficiencies. The returned ASM's own ``forward`` applies
+    the attenuation factors correctly in this build.
+    """
+    st, _ = _sirf()
+    am_for_tracing = st.AcquisitionModelUsingRayTracingMatrix()
+    am_for_tracing.set_up(acq_template, umap_image)
+    asm = st.AcquisitionSensitivityModel(umap_image, am_for_tracing)
+    asm.set_up(acq_template)
+    return asm
+
+
+def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuation=None):
+    """Ray-tracing acquisition model with optional in-model blur.
+
+    resolution_fwhm is an (fx, fy, fz) mm tuple applied as image-data
+    processor P in the linear model L = S G P (adjoint consistency verified
+    to ~1e-8 relative in the pinned digest build). Note that attaching a
+    Gaussian P reduces early-iteration central recovery versus an unmodelled
+    reconstruction of identically blurred data, so psf conditions are NOT
+    realised through P (see simulate_inputs and docs/reference/SIRF_API_NOTES.md).
+
+    attenuation accepts a ready-built AcquisitionSensitivityModel (see
+    make_acquisition_sensitivity). CAVEAT verified in the pinned digest:
+    once an ASM is attached, AcquisitionModel.forward returns near-zero data
+    irrespective of the mu-map content, while the ASM's own forward applies
+    the same factors correctly — so attenuation stays config-gated and this
+    function raises rather than silently producing wrong counts.
     """
     st, _ = _sirf()
     am = st.AcquisitionModelUsingRayTracingMatrix()
@@ -112,10 +137,11 @@ def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuatio
         processor.set_fwhms((fz, fy, fx))
         am.set_image_data_processor(processor)
     if attenuation is not None:
-        setter = getattr(am, "set_attenuation_image", None)
-        if setter is None:
-            raise RuntimeError("this SIRF build has no attenuation-image support")
-        setter(attenuation)
+        raise RuntimeError(
+            "attenuation via set_acquisition_sensitivity produces degenerate "
+            "forward projections in this SIRF build; see "
+            "docs/reference/SIRF_API_NOTES.md before enabling"
+        )
     return am
 
 

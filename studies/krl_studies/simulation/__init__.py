@@ -4,6 +4,7 @@ from krl_studies.simulation._api import (  # noqa: F401
     gaussian_smooth_image,
     image_voxel_sizes,
     make_acquisition_model,
+    make_acquisition_sensitivity,
     make_image,
     make_rdp_prior,
     poisson_sample,
