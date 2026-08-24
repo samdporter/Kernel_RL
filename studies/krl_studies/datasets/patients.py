@@ -53,3 +53,9 @@ class PatientDataset:
         roi_path = self.dir / _FILES["ROIs"]
         self.rois = _load(roi_path) if roi_path.exists() else None
         self.ground_truth = None
+
+    @property
+    def voxel_mm(self) -> tuple[float, float, float]:
+        nii = nib.load(str(self.dir / _FILES["PET"]))
+        sizes = nib.affines.voxel_sizes(nii.affine)
+        return (float(sizes[2]), float(sizes[1]), float(sizes[0]))

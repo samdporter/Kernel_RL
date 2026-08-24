@@ -122,39 +122,81 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         marker.unlink(missing_ok=True)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    if run.study != "spheres":
-        raise NotImplementedError("runner phase 1 supports study='spheres'")
-
-    ds = SphereDataset(root=run.dataset["root"])
-    gt = ds.ground_truth
-    guidance_arr = ds.guidance
-
+    gt: np.ndarray | None = None
+    observed_arr: np.ndarray
+    guidance_arr: np.ndarray
+    voxel_mm: tuple[float, float, float]
+    vois: list[np.ndarray]
     lesion_masks: list[np.ndarray] = []
     lesion_labels: list[int] = []
-    specs = None
-    if run.sim.get("add_tumours"):
-        specs = default_tumour_specs(
-            gt.shape,
-            ds.voxel_mm,
-            diameters_mm=tuple(run.sim.get("tumour_diameters_mm", DEFAULT_TUMOUR_DIAMETERS_MM)),
-        )
-        gt, lesion_masks = place_tumours(
-            gt,
-            specs,
-            contrast=float(run.sim.get("tumour_contrast", DEFAULT_CONTRAST)),
-            voxel_mm=ds.voxel_mm,
-        )
-        lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
+    patient_ds = None
 
-    observed_arr = _build_observed(run, ds, gt)
+    if run.study == "spheres":
+        ds = SphereDataset(root=run.dataset["root"])
+        gt = ds.ground_truth
+        guidance_arr = ds.guidance
+        voxel_mm = ds.voxel_mm
 
-    lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
-    exclusion = (
-        np.logical_or.reduce(lesion_rois or lesion_masks)
-        if (lesion_rois or lesion_masks)
-        else np.zeros_like(gt, dtype=bool)
-    )
-    vois = background_vois(gt.shape, exclude_mask=exclusion)
+        specs = None
+        if run.sim.get("add_tumours"):
+            specs = default_tumour_specs(
+                gt.shape,
+                ds.voxel_mm,
+                diameters_mm=tuple(run.sim.get("tumour_diameters_mm", DEFAULT_TUMOUR_DIAMETERS_MM)),
+            )
+            gt, lesion_masks = place_tumours(
+                gt,
+                specs,
+                contrast=float(run.sim.get("tumour_contrast", DEFAULT_CONTRAST)),
+                voxel_mm=ds.voxel_mm,
+            )
+            lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
+
+        observed_arr = _build_observed(run, ds, gt)
+
+        lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
+        exclusion = (
+            np.logical_or.reduce(lesion_rois or lesion_masks)
+            if (lesion_rois or lesion_masks)
+            else np.zeros_like(gt, dtype=bool)
+        )
+        vois = background_vois(gt.shape, exclude_mask=exclusion)
+
+    elif run.study == "patient":
+        from krl_studies.datasets.patients import PatientDataset
+
+        subject_id = run.dataset.get("subject_id")
+        if subject_id is None:
+            subject_id = run.dataset.get("subject")
+        if subject_id is None:
+            raise KeyError("patient dataset requires 'subject_id' (or 'subject') key")
+        root = run.dataset.get("root")
+        if root is None:
+            raise KeyError("patient dataset requires 'root' key")
+
+        if run.input_kind != "native":
+            raise ValueError(
+                f"patient study supports input_kind='native' only, got {run.input_kind!r} "
+                "(patient native is pure CIL; sirf_sim belongs to spheres/brainweb)"
+            )
+
+        patient_ds = PatientDataset(subject_id=str(subject_id), root=Path(root))
+        gt = None
+        observed_arr = patient_ds.pet
+        guidance_arr = patient_ds.guidance
+        voxel_mm = patient_ds.voxel_mm
+
+        if patient_ds.rois is not None:
+            try:
+                exclude_mask = patient_ds.rois.astype(bool)
+                vois = background_vois(observed_arr.shape, exclude_mask=exclude_mask)
+            except ValueError:
+                vois = []
+        else:
+            vois = []
+
+    else:
+        raise NotImplementedError(f"unknown study: {run.study!r} (expected 'spheres' or 'patient')")
 
     method_cls = METHOD_REGISTRY[run.method_name]
     if run.method_name == "gtm":
@@ -162,13 +204,42 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     params = dict(run.method_params)
     n_iterations = int(params.pop("iterations", 1))
     if run.method_name == "iy":
-        regions, brain = _iy_region_defaults(gt)
-        params.setdefault("region_masks", regions)
-        params.setdefault(
-            "psf_sigma_vox",
-            tuple(float(params.get("fwhm_mm", 5.0)) * FWHM_TO_SIGMA for _ in range(3)),
-        )
-        params.setdefault("brain_mask", brain)
+        if gt is not None:
+            regions, brain = _iy_region_defaults(gt)
+            params.setdefault("region_masks", regions)
+            params.setdefault(
+                "psf_sigma_vox",
+                tuple(float(params.get("fwhm_mm", 5.0)) * FWHM_TO_SIGMA for _ in range(3)),
+            )
+            params.setdefault("brain_mask", brain)
+        else:
+            assert patient_ds is not None
+            if patient_ds.rois is None:
+                raise NotImplementedError(
+                    "iterative Yang requires ROI segmentation for patient study but no ROIs.nii.gz "
+                    f"found for subject {patient_ds.subject_id!r} "
+                    "(patient has no ground truth; provide ROIs.nii.gz or use non-PVC methods)"
+                )
+            unique_labels = np.unique(patient_ds.rois[patient_ds.rois > 0])
+            if len(unique_labels) == 0:
+                raise NotImplementedError(
+                    f"iterative Yang requires non-empty ROI segmentation for patient study "
+                    f"but ROIs.nii.gz for subject {patient_ds.subject_id!r} contains no labelled voxels"
+                )
+            regions = [patient_ds.rois == lbl for lbl in unique_labels]
+            # brain is the PET support; add background compartment if brain extends beyond ROIs
+            brain = observed_arr > 0
+            if not np.any(brain):
+                brain = np.ones_like(observed_arr, dtype=bool)
+            background_region = brain & ~(patient_ds.rois > 0)
+            if np.any(background_region):
+                regions.append(background_region)
+            params.setdefault("region_masks", regions)
+            params.setdefault(
+                "psf_sigma_vox",
+                tuple(float(params.get("fwhm_mm", 5.0)) * FWHM_TO_SIGMA for _ in range(3)),
+            )
+            params.setdefault("brain_mask", brain)
 
     rows: list[dict[str, Any]] = []
     best_nrmse = float("inf")
@@ -179,8 +250,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         td_path = Path(td)
         obs_path = td_path / "observed.nii"
         guide_path = td_path / "guidance.nii"
-        save_image(_wrap(observed_arr, ds.voxel_mm), obs_path)
-        save_image(_wrap(guidance_arr, ds.voxel_mm), guide_path)
+        save_image(_wrap(observed_arr, voxel_mm), obs_path)
+        save_image(_wrap(guidance_arr, voxel_mm), guide_path)
         observed_cil = load_nifti_as_imagedata(obs_path)
         guidance_cil = load_nifti_as_imagedata(guide_path)
 
@@ -194,17 +265,21 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             row: dict[str, Any] = {"iteration": it.iteration}
             if it.objective is not None:
                 row["objective"] = it.objective
-            value = nrmse(it.image, gt)
-            row["nrmse"] = value
-            if value < best_nrmse:
-                best_nrmse = value
-                best_img = it.image.copy()
-            for i, mask in enumerate(lesion_masks):
-                d_mm = lesion_labels[i]
+            if gt is not None:
+                value = nrmse(it.image, gt)
+                row["nrmse"] = value
+                if value < best_nrmse:
+                    best_nrmse = value
+                    best_img = it.image.copy()
+                for i, mask in enumerate(lesion_masks):
+                    d_mm = lesion_labels[i]
+                    if vois:
+                        row[f"crc_mm{d_mm}"] = crc_percent(mask, it.image, gt, vois)
                 if vois:
-                    row[f"crc_mm{d_mm}"] = crc_percent(mask, it.image, gt, vois)
-            if vois:
-                row["bv_percent"] = background_variability(it.image, vois)
+                    row["bv_percent"] = background_variability(it.image, vois)
+            else:
+                if vois:
+                    row["bv_percent"] = background_variability(it.image, vois)
             rows.append(row)
             final_img = it.image
 
@@ -213,9 +288,9 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
 
     write_metrics_csv(rows, out_dir / "metrics.csv")
     if final_img is not None:
-        save_image(_wrap(final_img, ds.voxel_mm), out_dir / "final.nii.gz")
+        save_image(_wrap(final_img, voxel_mm), out_dir / "final.nii.gz")
     if best_img is not None:
-        save_image(_wrap(best_img, ds.voxel_mm), out_dir / "best_nrmse.nii.gz")
+        save_image(_wrap(best_img, voxel_mm), out_dir / "best_nrmse.nii.gz")
 
     manifest = {
         "run_id": run.run_id,

@@ -1,5 +1,7 @@
 # MK-H001 demonstration: no ground truth; convergence + artefacts only.
-# Requires patient study support (Plan 2 wires SIRF inputs + patient runner path).
+# Patient native path is pure CIL (no SIRF simulation): observed = PET.nii.gz,
+# guidance = T1.nii.gz, optional ROIs.nii.gz for BV/VOIs; no ground truth so
+# metrics carry objective (+ bv when ROIs present) and omit nrmse/crc.
 study: patient
 dataset:
   kind: patient
