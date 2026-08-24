@@ -89,6 +89,20 @@ def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> np.ndarr
             realisation=int(run.input_params.get("realisation", 0)),
             voxel_mm=ds.voxel_mm,
         )
+    if run.input_kind == "sirf_sim":
+        from krl_studies.simulation.simulate import simulate_inputs  # noqa: I001,WPS433 - lazy so native dry-run doesn't need SIRF
+
+        cfg = dict(run.input_params)
+        if "seed" not in cfg:
+            cfg["seed"] = int(run.sim.get("seed", 0))
+        if "n_subits" not in cfg and "n_subiterations" not in cfg:
+            if "n_subits" in run.sim:
+                cfg["n_subits"] = int(run.sim["n_subits"])
+            elif "n_subiterations" in run.sim:
+                cfg["n_subiterations"] = int(run.sim["n_subiterations"])
+        cfg.setdefault("scanner", run.input_params.get("scanner", "Siemens mMR"))
+        recon, _meta = simulate_inputs(gt, cfg)
+        return recon
     raise ValueError(f"unknown input kind: {run.input_kind}")
 
 
@@ -114,9 +128,10 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     ds = SphereDataset(root=run.dataset["root"])
     gt = ds.ground_truth
     guidance_arr = ds.guidance
-    observed_arr = _build_observed(run, ds, gt)
 
     lesion_masks: list[np.ndarray] = []
+    lesion_labels: list[int] = []
+    specs = None
     if run.sim.get("add_tumours"):
         specs = default_tumour_specs(
             gt.shape,
@@ -129,16 +144,9 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             contrast=float(run.sim.get("tumour_contrast", DEFAULT_CONTRAST)),
             voxel_mm=ds.voxel_mm,
         )
-        if run.input_kind == "quick_sim":
-            observed_arr = quick_sim(
-                gt,
-                fwhm_mm=float(run.input_params["fwhm_mm"]),
-                counts=float(run.input_params["counts"]),
-                realisation=int(run.input_params.get("realisation", 0)),
-                voxel_mm=ds.voxel_mm,
-            )
+        lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
 
-    lesion_labels = [round(2 * s["radius_mm"]) for s in specs] if run.sim.get("add_tumours") else []
+    observed_arr = _build_observed(run, ds, gt)
 
     lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
     exclusion = (

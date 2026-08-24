@@ -1,0 +1,30 @@
+# SIRF simulation sweep over spheres phantom.
+# Inputs are reconstructed from simulated Vision/mMR acquisitions (via SIRF/STIR)
+# under three recon-PSF conditions × RDP β grid × count levels × noise realisations.
+# Heavy sweeps belong on the cluster; keep local runs tiny (Plan 3).
+study: spheres
+dataset:
+  kind: spheres
+  root: data/spheres
+sim:
+  seed: 0
+  add_tumours: true
+inputs:
+  - kind: sirf_sim
+    params:
+      condition: [psf-none, psf-undersized, psf-matched]
+      beta: [null, 10.0, 50.0]
+      counts: [1.0e7]
+      realisation: [0, 1]
+methods:
+  - name: rl
+    params: {fwhm_mm: 5.5, iterations: 10}
+  - name: krl
+    params:
+      fwhm_mm: 5.5
+      iterations: 10
+      num_neighbours: 9
+      sigma_anat: [0.2, 1.0]
+  - name: post_smoothing
+    params: {sigma_mm: [2.0]}
+output: results/spheres_sirf
