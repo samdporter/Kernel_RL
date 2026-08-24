@@ -39,3 +39,10 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E402",  # lazy sirf imports guarded in simulation/_api.py
+    "F841",  # captured intermediate results in tests
+]

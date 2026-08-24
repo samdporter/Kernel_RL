@@ -5,7 +5,10 @@ from krl_studies.config import expand_scenario, load_scenario_dict
 SCENARIO = {
     "study": "spheres",
     "dataset": {"kind": "spheres", "root": "data/spheres"},
-    "inputs": [{"kind": "preblurred"}, {"kind": "quick_sim", "params": {"fwhm_mm": [5.0], "counts": [1e5], "realisation": [0, 1]}}],
+    "inputs": [
+        {"kind": "preblurred"},
+        {"kind": "quick_sim", "params": {"fwhm_mm": [5.0], "counts": [1e5], "realisation": [0, 1]}},
+    ],
     "methods": [
         {"name": "post_smoothing", "params": {"sigma_mm": [2.0]}},
         {"name": "rl", "params": {"fwhm_mm": 5.0, "iterations": 10}},
