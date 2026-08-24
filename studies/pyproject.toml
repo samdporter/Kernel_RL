@@ -31,6 +31,9 @@ include = ["krl_studies*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-q --tb=short"
+markers = [
+    "sirf: tests requiring SIRF (run inside the sirf container via make study-sirf-test)",
+]
 
 [tool.ruff]
 line-length = 120

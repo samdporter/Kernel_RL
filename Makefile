@@ -1,4 +1,4 @@
-.PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint
+.PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint study-docker-pull study-sirf-test study-docker-python
 
 help:
 	@echo "cil-krl development commands"
@@ -36,3 +36,12 @@ study-test:
 
 study-lint:
 	ruff check src/ tests/ studies/
+
+study-docker-pull:
+	docker pull synerbi/sirf:latest
+
+study-sirf-test:
+	docker compose -f studies/docker-compose.yaml run --rm sirf
+
+study-docker-python:
+	docker compose -f studies/docker-compose.yaml run --rm sirf bash

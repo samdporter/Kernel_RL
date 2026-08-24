@@ -1,0 +1,14 @@
+services:
+  sirf:
+    image: synerbi/sirf:latest
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    # OMP_NUM_THREADS=1 pins STIR/OpenMP reductions so identical inputs give
+    # bit-identical reconstructions (see docs/reference/SIRF_API_NOTES.md).
+    # Exported in the command (not `environment:`) because the image's
+    # omp_num_threads.sh hook aborts when the variable is already set.
+    command: >
+      bash -lc "export OMP_NUM_THREADS=1 &&
+                pip install -q -e '.' -e './studies[dev]' &&
+                python -m pytest studies/tests -m sirf -v"
