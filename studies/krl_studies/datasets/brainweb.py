@@ -9,6 +9,7 @@ Outputs per subject (in ``out_dir``):
   - ``pet_gt.nii.gz``  ground-truth PET with optional tumours
   - ``mr_t1.nii.gz``   T1-weighted MR (lesion-free)
   - ``labels.nii.gz``  integer labels: 0 background, 1 CSF, 2 GM, 3 WM
+  - ``mu_map.nii.gz``  attenuation map (mu in 1/cm) on the same grid as PET
 
 ``regions_from_labels`` converts the label volume into three boolean masks
 [WM, GM, CSF/background] suitable for iY/GMM PVC comparators. The third mask
@@ -94,8 +95,9 @@ def prepare_subject(
 
     Returns:
         (paths, labels) where ``paths`` is ``{"pet_gt": Path, "mr_t1": Path,
-        "labels": Path}`` and ``labels`` is the ``(z,y,x)`` integer label
-        array (0 BG, 1 CSF, 2 GM, 3 WM) matching the saved PET/MR geometry.
+        "labels": Path, "mu_map": Path}`` and ``labels`` is the ``(z,y,x)``
+        integer label array (0 BG, 1 CSF, 2 GM, 3 WM) matching the saved
+        PET/MR geometry.
 
     Requires:
         ``pip install brainweb nibabel scipy scikit-image requests tqdm``
@@ -137,6 +139,7 @@ def prepare_subject(
     )
     pet = np.asarray(vol["PET"], dtype=np.float32)
     t1 = np.asarray(vol["T1"], dtype=np.float32)
+    u_map = np.asarray(vol["uMap"], dtype=np.float32)
 
     try:
         voxel_mm = tuple(float(v) for v in np.asarray(vol["res"]).ravel().tolist())
@@ -186,12 +189,14 @@ def prepare_subject(
     pet_path = out_dir / "pet_gt.nii.gz"
     mr_path = out_dir / "mr_t1.nii.gz"
     label_path = out_dir / "labels.nii.gz"
+    mu_path = out_dir / "mu_map.nii.gz"
 
     _save_nifti(pet_gt, pet_path, voxel_mm)
     _save_nifti(t1, mr_path, voxel_mm)
     _save_nifti(labels, label_path, voxel_mm)
+    _save_nifti(u_map, mu_path, voxel_mm)
 
-    paths = {"pet_gt": pet_path, "mr_t1": mr_path, "labels": label_path}
+    paths = {"pet_gt": pet_path, "mr_t1": mr_path, "labels": label_path, "mu_map": mu_path}
     return paths, labels
 
 

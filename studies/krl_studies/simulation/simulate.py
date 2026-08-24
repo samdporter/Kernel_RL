@@ -191,5 +191,6 @@ def simulate_inputs(gt_array, cfg_dict):
         "realisation": realisation,
         "seed": seed_full,
         "n_subits": n_subits,
+        "attenuation": attenuation is not None,
     }
     return recon, meta

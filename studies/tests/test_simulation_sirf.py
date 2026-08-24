@@ -109,6 +109,7 @@ def test_simulate_inputs_shapes_and_determinism():
     assert len(meta_a["scanner_shape"]) == 3
     assert all(v > 0 for v in meta_a["scanner_voxel_mm"])
     assert meta_a["seed"] == 1337
+    assert meta_a["attenuation"] is False
 
 
 def test_simulate_inputs_accepts_attenuation_path(tmp_path):
@@ -134,6 +135,7 @@ def test_simulate_inputs_accepts_attenuation_path(tmp_path):
     assert np.isfinite(recon).all()
     assert not np.array_equal(recon, baseline)
     assert meta["input_shape"] == gt.shape
+    assert meta["attenuation"] is True
 
 
 def test_simulate_inputs_metadata_tracks_condition_models():

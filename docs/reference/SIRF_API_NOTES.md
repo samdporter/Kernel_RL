@@ -140,6 +140,13 @@ raises the explicit STIR setup error. `make_acquisition_model(attenuation=...)`
 therefore attaches only a ready-built factor ASM, and `simulate_inputs`
 converts a resampled NIfTI uMap through this helper.
 
+BrainWeb uMap route: `brainweb.get_mmr_fromfile` returns `uMap` alongside
+PET/T1/T2 on the same mMR grid, in 1/cm (bone ~0.13, tissue ~0.096), flipped
+identically so all volumes stay co-registered. `prepare_subject` exports it
+as `mu_map.nii.gz`; campaigns pass it via `attenuation_path`. Emission GT
+and the mu-map share the identical centred FOV embedding, preserving
+co-registration through simulation.
+
 Resolution processor (corrected understanding): the adjoint of the composed
 model L = S G P is numerically consistent (<P-model inner-product error 5e-8),
 and pairing data/model FWHM correctly still yields LOWER early-iteration

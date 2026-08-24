@@ -102,9 +102,11 @@ def test_prepare_subject_writes_files(tmp_path):
     assert pathlib.Path(paths["pet_gt"]).exists()
     assert pathlib.Path(paths["mr_t1"]).exists()
     assert pathlib.Path(paths["labels"]).exists()
+    assert pathlib.Path(paths["mu_map"]).exists()
     assert (out / "pet_gt.nii.gz").exists()
     assert (out / "mr_t1.nii.gz").exists()
     assert (out / "labels.nii.gz").exists()
+    assert (out / "mu_map.nii.gz").exists()
 
     # shapes & dtypes
     import nibabel as nib
@@ -112,8 +114,12 @@ def test_prepare_subject_writes_files(tmp_path):
     pet = np.transpose(nib.load(str(paths["pet_gt"])).get_fdata(), (2, 1, 0))
     t1 = np.transpose(nib.load(str(paths["mr_t1"])).get_fdata(), (2, 1, 0))
     lab = np.transpose(nib.load(str(paths["labels"])).get_fdata(), (2, 1, 0))
+    mu = np.transpose(nib.load(str(paths["mu_map"])).get_fdata(), (2, 1, 0))
     assert pet.shape == t1.shape == lab.shape == labels.shape
     assert pet.ndim == 3
+    # uMap shares the PET grid; values are mu in 1/cm (bone ~0.13, tissue ~0.096)
+    assert mu.shape == pet.shape
+    assert 0.0 < float(mu.max()) <= 0.15
     assert set(np.unique(labels).tolist()).issubset({0, 1, 2, 3})
     assert pet.max() > 0
     assert t1.max() > 0
