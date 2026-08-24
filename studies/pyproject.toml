@@ -33,6 +33,7 @@ python_files = ["test_*.py"]
 addopts = "-q --tb=short"
 markers = [
     "sirf: tests requiring SIRF (run inside the sirf container via make study-sirf-test)",
+    "brainweb: tests requiring brainweb package and network download",
 ]
 
 [tool.ruff]

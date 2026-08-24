@@ -40,12 +40,14 @@ def default_tumour_specs(
         )
     centre = np.array(shape, dtype=float) / 2.0
     extent = np.array(shape, dtype=float) * np.array(voxel_mm, dtype=float)
+    vmm = np.array(voxel_mm, dtype=float)
     specs = []
     for diameter, frac in zip(sorted(diameters_mm), _POSITION_FRACTIONS):
-        offset = np.array(frac, dtype=float) * extent
+        offset_mm = np.array(frac, dtype=float) * extent
+        offset_vox = offset_mm / vmm
         specs.append(
             {
-                "centre_zyx": tuple(centre + offset),
+                "centre_zyx": tuple(centre + offset_vox),
                 "radius_mm": diameter / 2.0,
                 "contrast": contrast,
             }
@@ -75,14 +77,25 @@ def place_tumours(
     """Return (pet with tumours, per-tumour boolean masks); input untouched."""
     out = pet.astype(np.float32, copy=True)
     masks = []
+    vmm = np.asarray(voxel_mm, dtype=float)
     for spec in specs:
         c = spec.get("contrast", contrast)
         if c is None:
             raise ValueError("each spec or the call must provide contrast")
-        radius_vox = float(spec["radius_mm"]) / np.asarray(voxel_mm, dtype=float)
-        if not np.ptp(radius_vox) < 1e-6:
-            raise NotImplementedError("anisotropic lesion radii not supported")
-        mask = sphere_mask(pet.shape, spec["centre_zyx"], float(radius_vox[0]))
+        radius_vox = float(spec["radius_mm"]) / vmm
+        if np.ptp(radius_vox) < 1e-6:
+            mask = sphere_mask(pet.shape, spec["centre_zyx"], float(radius_vox[0]))
+        else:
+            # anisotropic voxel (e.g. BrainWeb mMR 2.03×2.09×2.09): physical
+            # sphere becomes ellipsoid in voxel index space.
+            z = np.arange(pet.shape[0], dtype=np.float32)
+            y = np.arange(pet.shape[1], dtype=np.float32)
+            x = np.arange(pet.shape[2], dtype=np.float32)
+            zz, yy, xx = np.meshgrid(z, y, x, indexing="ij")
+            cz, cy, cx = spec["centre_zyx"]
+            rz, ry, rx = radius_vox
+            d2 = ((zz - cz) / rz) ** 2 + ((yy - cy) / ry) ** 2 + ((xx - cx) / rx) ** 2
+            mask = d2 <= 1.0
         out[mask] *= float(c)
         masks.append(mask)
     return out, masks
