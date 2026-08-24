@@ -65,3 +65,29 @@ def test_gaussian_smooth_image_preserves_shape_and_order():
     assert abs(arr.sum() - np.asarray(image.as_array()).sum()) < 0.05 * np.abs(
         np.asarray(image.as_array()).sum()
     )
+
+
+def test_simulate_inputs_shapes_and_determinism():
+    from krl_studies.simulation import simulate_inputs
+
+    gt = np.zeros((64, 64, 64), dtype=np.float32)
+    gt[24:40, 24:40, 24:40] = 5.0
+    gt += 1.0
+
+    cfg = {
+        "condition": "psf-matched",
+        "beta": None,
+        "counts": 5e6,
+        "realisation": 0,
+        "seed": 1337,
+        "n_subits": 4,
+    }
+    a, meta_a = simulate_inputs(gt, cfg)
+    b, meta_b = simulate_inputs(gt, dict(cfg))
+    assert np.array_equal(a, b)
+    assert meta_a["true_fwhm"] == (4.5, 4.5, 6.4)
+    assert a.shape == gt.shape
+    assert a.min() >= 0
+
+    c, _ = simulate_inputs(gt, dict(cfg, realisation=3))
+    assert not np.array_equal(a, c)

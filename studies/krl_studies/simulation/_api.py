@@ -111,6 +111,34 @@ def gaussian_smooth_image(image, fwhm_mm):
     return out
 
 
+def make_image(acq_template, array):
+    """Create an ImageData from a (z,y,x) ndarray using the template geometry.
+
+    Voxel sizes are taken from ``acq_template.create_uniform_image`` so the
+    z-spacing satisfies the scanner's ring-spacing divisibility rule
+    (sirf.Utilities.error otherwise). The array shape is preserved; resampling
+    to the scanner grid is deferred to Plan 3 (see docs/reference/SIRF_API_NOTES.md).
+    """
+    st, _ = _sirf()
+    arr = np.asarray(array, dtype=np.float32)
+    if arr.ndim != 3:
+        raise ValueError(f"array must be 3-D (z,y,x), got shape {arr.shape}")
+    uniform = acq_template.create_uniform_image(1.0)
+    vsize = uniform.voxel_sizes()
+    img = st.ImageData()
+    img.initialise(tuple(int(s) for s in arr.shape), vsize=vsize)
+    img.fill(arr)
+    return img
+
+
+def make_rdp_prior(beta: float):
+    """RelativeDifferencePrior with the given penalisation factor."""
+    st, _ = _sirf()
+    prior = st.RelativeDifferencePrior()
+    prior.set_penalisation_factor(float(beta))
+    return prior
+
+
 def poisson_sample(prompts, seed: int):
     """Count-domain Poisson noise on scaled prompt data.
 
