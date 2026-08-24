@@ -1,8 +1,11 @@
-# SIRF API notes (calibrated against synerbi/sirf:latest)
+# SIRF API notes (calibrated against synerbi/sirf, pinned by digest)
 
 Recorded 2026-08-24 from `studies/scripts/probe_sirf_api.py` runs inside
 `docker compose -f studies/docker-compose.yaml run --rm sirf` on
-linux/amd64-under-emulation (Apple Silicon host). `studies/krl_studies/simulation/_api.py`
+linux/amd64-under-emulation (Apple Silicon host). The compose service pins the
+calibrated image digest
+`sha256:643c7955717ac08c6f44c6d3fe2ef064ebb54167f1da68771ed3e6dc07caf58d`;
+`studies/krl_studies/simulation/_api.py`
 pins exactly these surfaces; fix deltas there alone and re-probe.
 
 ## Environment
@@ -113,6 +116,38 @@ supported for emulation-friendly tests.
 
 No `set_resolution_model` on the ray-tracing AM, but `set_image_data_processor`
 exists (a Gaussian filter applied inside the forward model was accepted).
+Plan 3 update: `make_acquisition_model(acq, image, resolution_fwhm=...)` calls
+`set_up` FIRST and attaches the processor afterwards — verified working in the
+pinned digest build (blur changes forward projections as expected). The
+forward model carries the true physical blur; the reconstruction gets its own
+condition-specific model (none / undersized / matched).
+
+Attenuation: the pinned digest build exposes NO `set_attenuation_image` on
+`AcquisitionModelUsingRayTracingMatrix`. `_api.make_acquisition_model` raises
+an explicit `RuntimeError` when a uMap is requested (never silently drops it);
+verified by container test. Re-probe if the image digest changes.
+
+### Plan 3 findings (scanner-grid round trip, 2026-08-24)
+
+- Sub-FOV image grids destabilise OSMAPOSL on the reduced mMR template:
+  extent-preserving resampling of a 48³ phantom to ~(24,23,23) voxels drives
+  update ratios to float-max and the estimate to a plateau. Resampling onto
+  the scanner's FULL uniform-image grid, centred like a clinical
+  reconstruction, is well-conditioned. `simulate_inputs` therefore maps GT via
+  `geometry.resample_to_fov_zyx` / `resample_from_fov_zyx`.
+- Delta phantoms (near-zero background) diverge under MLEM regardless of
+  grid; calibration tests must use a compact lesion on a uniform background.
+- Recon-side resolution processors are NOT usable for the psf conditions in
+  this build: attaching `SeparableGaussianImageFilter` to the reconstruction
+  AM (either set_up order) consistently REDUCES central recovery versus a
+  clean model — the processor's adjoint is not honoured inside OSMAPOSL. The
+  conditions are therefore realised by pre-blurring the ground truth to each
+  condition's target residual before a clean acquisition model (the original
+  DECIDED route above), whose measured transverse residuals match targets to
+  ~5% per the table above. Revisit recon-side modelling only after re-probing
+  a newer SIRF build.
+- `scipy.ndimage.zoom` needs `grid_mode=True`: default corner alignment
+  biases even-ratio resamples by half a voxel.
 DECIDED route for Task 3: **pre-blur the ground truth with
 `SeparableGaussianImageFilter` at the condition's residual FWHM before forward
 projection** (+ optional matched post-filter during reconstruction later). This

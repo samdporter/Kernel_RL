@@ -1,6 +1,8 @@
 services:
   sirf:
-    image: synerbi/sirf:latest
+    # Digest pins the calibrated SIRF build (docs/reference/SIRF_API_NOTES.md).
+    platform: linux/amd64
+    image: synerbi/sirf@sha256:643c7955717ac08c6f44c6d3fe2ef064ebb54167f1da68771ed3e6dc07caf58d
     working_dir: /workspace
     volumes:
       - ..:/workspace

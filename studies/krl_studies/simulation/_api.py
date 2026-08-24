@@ -73,17 +73,49 @@ def acquisition_template(
             "expected TOF=1 template; see docs/reference/SIRF_API_NOTES.md"
         )
     pdm = stir.ProjDataInMemory(stir.ExamInfo(), pdi)
-    workdir = tempfile.mkdtemp(prefix="krl_studies_acqtpl_")
-    hs = os.path.join(workdir, "template.hs")
-    pdm.write_to_file(hs)
-    return st.AcquisitionData(hs)
+    # AcquisitionData must be constructed before the tempdir disappears; SIRF
+    # reads the Interfile pair during construction only.
+    with tempfile.TemporaryDirectory(prefix="krl_studies_acqtpl_") as workdir:
+        hs = os.path.join(workdir, "template.hs")
+        pdm.write_to_file(hs)
+        return st.AcquisitionData(hs)
 
 
-def make_acquisition_model(acq_template, image):
-    """Set-up ray-tracing acquisition model for the given geometry."""
+def image_voxel_sizes(image) -> tuple[float, float, float]:
+    """Return SIRF image voxel sizes in array order (z, y, x)."""
+    _require_sirf()
+    return tuple(float(v) for v in image.voxel_sizes())
+
+
+def scanner_grid(acq_template) -> tuple[tuple[int, int, int], tuple[float, float, float]]:
+    """Return the scanner image grid as (shape_zyx, voxel_mm_zyx)."""
+    _require_sirf()
+    image = acq_template.create_uniform_image(1.0)
+    shape = tuple(int(v) for v in np.asarray(image.as_array()).shape)
+    return shape, image_voxel_sizes(image)
+
+
+def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuation=None):
+    """Ray-tracing acquisition model with optional in-model blur and uMap.
+
+    resolution_fwhm is an (fx, fy, fz) mm tuple applied inside the forward
+    model via a separable Gaussian image-data processor. attenuation is an
+    optional uMap ImageData; requesting it on a build without attenuation
+    support raises instead of silently dropping it.
+    """
     st, _ = _sirf()
     am = st.AcquisitionModelUsingRayTracingMatrix()
     am.set_up(acq_template, image)
+    if resolution_fwhm is not None:
+        fx, fy, fz = (float(v) for v in resolution_fwhm)
+        processor = st.SeparableGaussianImageFilter()
+        processor.set_fwhms((fz, fy, fx))
+        am.set_image_data_processor(processor)
+    if attenuation is not None:
+        setter = getattr(am, "set_attenuation_image", None)
+        if setter is None:
+            raise RuntimeError("this SIRF build has no attenuation-image support")
+        setter(attenuation)
     return am
 
 

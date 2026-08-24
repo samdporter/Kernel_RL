@@ -1,18 +1,29 @@
 """SIRF simulation pipeline: GT -> forward -> Poisson -> OSEM/RDP.
 
-Ground-truth arrays are (z,y,x) at ~1 mm. Vision-grid resampling is deferred
-to Plan 3; this module maps the GT onto the scanner's native image grid via
-``_api.make_image`` which copies voxel sizes from the acquisition template's
-uniform image (ring-spacing / integer) so ``AcquisitionModelUsingRayTracingMatrix``
-accepts the geometry. The only SIRF/STIR imports are through ``_api``.
+Ground-truth arrays are (z,y,x) on their native NIfTI grid. The volume is
+resampled to the scanner's physical image grid before projection and the
+reconstruction is resampled back to the original grid, so the returned array
+stays aligned with the caller's GT/guidance while the simulation runs on real
+scanner geometry.
+
+Resolution modelling follows the Plan 3 split: the true system blur
+(forward_model_fwhm) always enters the forward model; only the reconstruction
+model varies by condition (none / undersized / matched). Measured residuals are
+calibrated separately and recorded, not assumed to equal the Vision targets.
+
+The only SIRF/STIR imports are through ``_api``.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+import nibabel as nib
 import numpy as np
 
 from krl_studies.simulation import _api
-from krl_studies.simulation.presets import resolution_for_condition
+from krl_studies.simulation.geometry import resample_from_fov_zyx, resample_to_fov_zyx
+from krl_studies.simulation.presets import condition_spec
 
 # Cache acquisition templates per scanner key to avoid repeated Interfile
 # round-trips when simulate_inputs is called repeatedly (e.g. determinism
@@ -21,7 +32,7 @@ _ACQ_CACHE: dict[str, object] = {}
 
 # Reduced geometry used for emulation-friendly tests. Full scanner grids
 # (4096 views etc.) are ~100× larger and time out under amd64 emulation;
-# clinical full-grid runs belong on the cluster (Plan 3).
+# clinical full-grid runs belong on the cluster.
 _REDUCED_KWARGS = {"span": 1, "max_ring_diff": 1, "num_views": 42, "num_tangential": 64}
 
 
@@ -29,20 +40,15 @@ def _get_acquisition(scanner_name: str):
     """Return (acq_template, scanner_used) with mMR fallback.
 
     Tries the requested scanner with reduced kwargs; on any exception falls
-    back to ``Siemens mMR`` reduced (Vision TOF=1 route is used inside
-    ``_api.acquisition_template``). The returned scanner name is recorded in
+    back to ``Siemens mMR`` reduced. The returned scanner name is recorded in
     meta["scanner"].
     """
-    # Check cache first for the requested name.
     cache_key = scanner_name
     if cache_key in _ACQ_CACHE:
-        # We need to know which scanner was actually used for this key;
-        # store tuple (acq, used) rather than just acq.
         cached = _ACQ_CACHE[cache_key]
         if isinstance(cached, tuple):
             return cached
-        # Legacy entry (should not happen) – treat as mMR.
-        return cached, scanner_name
+        raise RuntimeError("corrupt acquisition cache entry")
 
     def _try(name: str):
         return _api.acquisition_template(name, **_REDUCED_KWARGS)
@@ -51,7 +57,6 @@ def _get_acquisition(scanner_name: str):
         acq = _try(scanner_name)
         used = scanner_name
     except Exception:
-        # Fallback to mMR for stability if Vision route is still problematic.
         fallback = "Siemens mMR"
         if scanner_name == fallback:
             raise
@@ -62,40 +67,56 @@ def _get_acquisition(scanner_name: str):
     return acq, used
 
 
+def _load_attenuation(
+    attenuation_path: str | Path,
+    acq_template,
+    scanner_shape,
+    scanner_voxel_mm,
+):
+    """Load a uMap NIfTI, resample it onto the scanner grid, wrap as ImageData."""
+    nii = nib.load(str(attenuation_path))
+    sizes = nib.affines.voxel_sizes(nii.affine)
+    source_voxel_mm = (float(sizes[2]), float(sizes[1]), float(sizes[0]))
+    umap_arr = np.transpose(nii.get_fdata().astype(np.float32), (2, 1, 0))
+    umap_scanner, _ = resample_to_fov_zyx(umap_arr, source_voxel_mm, scanner_shape, scanner_voxel_mm)
+    return _api.make_image(acq_template, umap_scanner)
+
+
 def simulate_inputs(gt_array, cfg_dict):
     """Forward-project a ground-truth volume and reconstruct a noisy input.
 
     Parameters
     ----------
     gt_array:
-        3-D ndarray with shape (z, y, x). Values are emission activity.
+        3-D ndarray with shape (z, y, x). Values are emission activity on the
+        input grid described by ``input_voxel_mm``.
     cfg_dict:
         Mapping with keys ``condition`` (psf-none / psf-undersized / psf-matched),
         ``beta`` (None or float for RDP prior), ``counts`` (target total prompts),
         ``realisation`` (int), ``seed`` (int), ``n_subits`` (or ``n_subiterations``),
-        and optional ``scanner`` (``"Siemens mMR"`` or ``"Siemens VISION 600"``;
-        defaults to mMR for stability).
+        optional ``input_voxel_mm`` ((z,y,x) mm of gt_array; default 1 mm),
+        optional ``attenuation_path`` (uMap NIfTI), and optional ``scanner``
+        (``"Siemens mMR"`` or ``"Siemens VISION 600"``; defaults to mMR).
 
     Returns
     -------
     recon:
-        3-D ndarray (z, y, x) reconstructed from noisy prompts.
+        3-D ndarray (z, y, x) on the original input grid.
     meta:
-        Dict with ``true_fwhm``, ``scanner``, ``beta``, ``counts``,
-        ``realisation``, ``n_subits`` (and ``seed`` for reproducibility).
+        Dict describing both grids, the resolution models, the scanner actually
+        used, count/noise configuration, and the full derived seed.
     """
     gt = np.asarray(gt_array)
     if gt.ndim != 3:
         raise ValueError(f"gt_array must be 3-D (z,y,x), got shape {gt.shape}")
 
-    condition = cfg_dict["condition"]
-    true_fwhm = resolution_for_condition(condition)
+    spec = condition_spec(cfg_dict["condition"])
 
     beta = cfg_dict.get("beta", None)
     counts = float(cfg_dict["counts"])
     realisation = int(cfg_dict.get("realisation", 0))
     seed = int(cfg_dict.get("seed", 0))
-    # Accept both n_subits and n_subiterations spellings.
+    seed_full = int(seed + realisation * 7919)
     if "n_subits" in cfg_dict:
         n_subits = int(cfg_dict["n_subits"])
     elif "n_subiterations" in cfg_dict:
@@ -103,72 +124,70 @@ def simulate_inputs(gt_array, cfg_dict):
     else:
         n_subits = 4
 
+    input_voxel_mm = tuple(float(v) for v in cfg_dict.get("input_voxel_mm", (1.0, 1.0, 1.0)))
     scanner_req = str(cfg_dict.get("scanner", "Siemens mMR"))
 
     acq, scanner_used = _get_acquisition(scanner_req)
+    scanner_shape, scanner_voxel_mm = _api.scanner_grid(acq)
 
-    # Build ImageData with scanner-compatible voxel sizes; resampling to the
-    # scanner grid is deferred to Plan 3 (phantom is already ~1 mm, we just
-    # adopt the scanner's native spacing so the projector accepts the geometry).
-    gt_image = _api.make_image(acq, gt)
+    attenuation = None
+    attenuation_path = cfg_dict.get("attenuation_path")
+    if attenuation_path is not None:
+        attenuation = _load_attenuation(Path(attenuation_path), acq, scanner_shape, scanner_voxel_mm)
 
-    # Pre-blur to the condition's residual FWHM (Task 1 decided route).
-    blurred = _api.gaussian_smooth_image(gt_image, true_fwhm)
+    # Resample GT onto the scanner's FULL image grid, centred like a clinical
+    # reconstruction. Extent-preserving sub-FOV grids destabilise OSMAPOSL
+    # (zero-sensitivity voxels blow up the update ratio); the native FOV grid
+    # is well-conditioned.
+    gt_scanner, _ = resample_to_fov_zyx(gt, input_voxel_mm, scanner_shape, scanner_voxel_mm)
+    gt_image = _api.make_image(acq, gt_scanner)
 
-    # Forward model.
-    am = _api.make_acquisition_model(acq, gt_image)
-    prompts = _api.forward_project(blurred, am)
+    # Calibrated route: the condition's target residual IS the true blur,
+    # applied as a pre-blur before a clean acquisition model. Recon-side
+    # processors are not adjoint-correct in this SIRF build and reduce
+    # recovery instead of sharpening (docs/reference/SIRF_API_NOTES.md).
+    gt_blurred = _api.gaussian_smooth_image(gt_image, spec.forward_model_fwhm_xyz)
+    forward_am = _api.make_acquisition_model(acq, gt_image, attenuation=attenuation)
+    prompts = _api.forward_project(gt_blurred, forward_am)
 
     # Scale so sum(prompts) == counts, then Poisson-sample.
     arr = np.asarray(prompts.as_array(), dtype=np.float64)
     total = float(arr.sum())
-    if total == 0:
-        scale = 0.0
-    else:
-        scale = counts / total
-    # Use a clone so the original forward prompts are not mutated.
+    scale = counts / total if total > 0 else 0.0
     scaled = prompts.clone()
     scaled.fill((arr * scale).astype(np.float32))
 
-    seed_full = int(seed + realisation * 7919)
     noisy = _api.poisson_sample(scaled, seed=seed_full)
 
-    # Prior: None -> plain OSEM, else RDP(beta).
     prior = None
     if beta is not None:
         prior = _api.make_rdp_prior(float(beta))
 
-    # Uniform initial estimate with the same geometry as gt_image.
     init = gt_image.clone()
     init.fill(1.0)
+    recon_am = _api.make_acquisition_model(acq, init, attenuation=attenuation)
 
-    recon_image = _api.reconstruct_osem(noisy, am, init, n_subiterations=n_subits, prior=prior)
+    recon_image = _api.reconstruct_osem(noisy, recon_am, init, n_subiterations=n_subits, prior=prior)
 
-    recon = np.asarray(recon_image.as_array())
-    # Ensure non-negative output (STIR should already be non-negative, but clip
-    # tiny negatives from prior handling).
-    recon = np.asarray(recon, dtype=np.float32)
-    # STIR images are (z,y,x); preserve that ordering.
-    if recon.shape != gt.shape:
-        # This should not happen when gt_image was built from gt_array, but
-        # guard against geometry mismatches by cropping/padding? For now raise
-        # to surface the issue rather than silently reshaping.
-        raise RuntimeError(f"recon shape {recon.shape} != gt shape {gt.shape}")
-
-    # Clip tiny negatives without affecting determinism for the test's min>=0.
-    # Use maximum to avoid altering bitwise determinism for identical recons?
-    # Clipping is deterministic and preserves bit-identical property for same
-    # cfg (same recon array -> same clipped array).
-    recon = np.maximum(recon, 0, out=recon)
+    recon_scanner = np.asarray(recon_image.as_array(), dtype=np.float32)
+    recon = resample_from_fov_zyx(recon_scanner, scanner_voxel_mm, gt.shape, input_voxel_mm)
+    recon = np.maximum(recon, 0.0, out=recon)
 
     meta = {
-        "true_fwhm": tuple(true_fwhm),
+        "input_shape": tuple(int(v) for v in gt.shape),
+        "input_voxel_mm": tuple(float(v) for v in input_voxel_mm),
+        "scanner_shape": tuple(int(v) for v in scanner_shape),
+        "scanner_voxel_mm": tuple(float(v) for v in scanner_voxel_mm),
+        "forward_model_fwhm": tuple(float(v) for v in spec.forward_model_fwhm_xyz),
+        "recon_model_fwhm": None if spec.recon_model_fwhm_xyz is None else tuple(
+            float(v) for v in spec.recon_model_fwhm_xyz
+        ),
+        "target_residual_fwhm": tuple(float(v) for v in spec.target_residual_fwhm_xyz),
         "scanner": scanner_used,
         "beta": beta,
         "counts": counts,
         "realisation": realisation,
+        "seed": seed_full,
         "n_subits": n_subits,
-        "seed": seed,
     }
-
     return recon, meta

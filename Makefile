@@ -38,7 +38,7 @@ study-lint:
 	ruff check src/ tests/ studies/
 
 study-docker-pull:
-	docker pull synerbi/sirf:latest
+	docker pull synerbi/sirf@sha256:643c7955717ac08c6f44c6d3fe2ef064ebb54167f1da68771ed3e6dc07caf58d
 
 study-sirf-test:
 	docker compose -f studies/docker-compose.yaml run --rm sirf

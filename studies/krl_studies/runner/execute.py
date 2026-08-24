@@ -78,9 +78,9 @@ def _wrap(arr: np.ndarray, voxel_mm) -> Any:
     return img
 
 
-def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> np.ndarray:
+def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
     if run.input_kind == "reference":
-        return ds.reference_pet
+        return ds.reference_pet, {}
     if run.input_kind == "quick_sim":
         return quick_sim(
             gt,
@@ -88,7 +88,7 @@ def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> np.ndarr
             counts=float(run.input_params["counts"]),
             realisation=int(run.input_params.get("realisation", 0)),
             voxel_mm=ds.voxel_mm,
-        )
+        ), {}
     if run.input_kind == "sirf_sim":
         from krl_studies.simulation.simulate import simulate_inputs  # noqa: I001,WPS433 - lazy so native dry-run doesn't need SIRF
 
@@ -101,8 +101,9 @@ def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> np.ndarr
             elif "n_subiterations" in run.sim:
                 cfg["n_subiterations"] = int(run.sim["n_subiterations"])
         cfg.setdefault("scanner", run.input_params.get("scanner", "Siemens mMR"))
-        recon, _meta = simulate_inputs(gt, cfg)
-        return recon
+        cfg.setdefault("input_voxel_mm", ds.voxel_mm)
+        recon, meta = simulate_inputs(gt, cfg)
+        return recon, meta
     raise ValueError(f"unknown input kind: {run.input_kind}")
 
 
@@ -152,7 +153,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             )
             lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
 
-        observed_arr = _build_observed(run, ds, gt)
+        observed_arr, simulation_meta = _build_observed(run, ds, gt)
 
         lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
         exclusion = (
@@ -301,6 +302,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         "method_params": run.method_params,
         "dataset": run.dataset,
         "sim": run.sim,
+        "simulation": simulation_meta,
         "status": "complete",
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "git_rev": _git_rev(),
