@@ -21,6 +21,7 @@ from krl_studies.datasets.lesions import (
     place_tumours,
 )
 from krl_studies.datasets.spheres import SphereDataset, quick_sim
+from krl_studies.datasets.transforms import apply_guidance_condition
 from krl_studies.methods import METHOD_REGISTRY
 from krl_studies.metrics import (
     background_variability,
@@ -114,6 +115,23 @@ def _iy_region_defaults(gt: np.ndarray) -> tuple[list[np.ndarray], np.ndarray]:
     return [hot, brain & ~hot], brain
 
 
+def _apply_guidance_condition(
+    guidance_arr: np.ndarray,
+    condition: str,
+    voxel_mm: tuple[float, float, float],
+    ds,
+) -> np.ndarray:
+    """Apply guidance condition to the guidance array."""
+    if condition == "exact":
+        return guidance_arr
+    if condition == "t2":
+        if not hasattr(ds, "t2") or ds.t2 is None:
+            raise FileNotFoundError(f"T2 not available for subject {getattr(ds, 'subject_id', 'unknown')}")
+        return ds.t2
+    # shift conditions
+    return apply_guidance_condition(guidance_arr, condition, voxel_mm, order=1)
+
+
 def execute_run(run: RunSpec, force: bool = False) -> Path:
     out_dir = Path(run.out_root) / run.run_id
     marker = out_dir / ".done"
@@ -131,8 +149,13 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     lesion_masks: list[np.ndarray] = []
     lesion_labels: list[int] = []
     patient_ds = None
+    simulation_meta: dict[str, Any] = {}
+
+    guidance_condition = run.input_params.get("guidance_condition", "exact")
 
     if run.study == "spheres":
+        from krl_studies.datasets.spheres import SphereDataset
+
         ds = SphereDataset(root=run.dataset["root"])
         gt = ds.ground_truth
         guidance_arr = ds.guidance
@@ -154,11 +177,44 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
 
         observed_arr, simulation_meta = _build_observed(run, ds, gt)
+        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, ds)
 
         lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
         exclusion = (
             np.logical_or.reduce(lesion_rois or lesion_masks)
             if (lesion_rois or lesion_masks)
+            else np.zeros_like(gt, dtype=bool)
+        )
+        vois = background_vois(gt.shape, exclude_mask=exclusion)
+
+    elif run.study == "brainweb":
+        from krl_studies.datasets.brainweb import BrainWebDataset
+
+        subject_id = run.dataset.get("subject_id")
+        if subject_id is None:
+            subject_id = run.dataset.get("subject")
+        if subject_id is None:
+            raise KeyError("brainweb dataset requires 'subject_id' (or 'subject') key")
+        root = run.dataset.get("root")
+        if root is None:
+            raise KeyError("brainweb dataset requires 'root' key")
+
+        ds = BrainWebDataset(root=Path(root), subject_id=int(subject_id))
+        gt = ds.ground_truth
+        guidance_arr = ds.guidance
+        voxel_mm = ds.voxel_mm
+
+        # Persisted tumour masks for CRC
+        lesion_masks = ds.lesion_masks if ds.lesion_masks.size > 0 else []
+        lesion_labels = [int(d) for d in ds.lesion_diameters_mm] if ds.lesion_diameters_mm else []
+
+        observed_arr, simulation_meta = _build_observed(run, ds, gt)
+        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, ds)
+
+        lesion_rois = ds.lesion_masks if ds.lesion_masks.size > 0 else derive_lesion_rois(gt)
+        exclusion = (
+            np.logical_or.reduce(lesion_masks)
+            if lesion_masks
             else np.zeros_like(gt, dtype=bool)
         )
         vois = background_vois(gt.shape, exclude_mask=exclusion)
@@ -186,6 +242,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         observed_arr = patient_ds.pet
         guidance_arr = patient_ds.guidance
         voxel_mm = patient_ds.voxel_mm
+        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, patient_ds)
 
         if patient_ds.rois is not None:
             try:
@@ -197,7 +254,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             vois = []
 
     else:
-        raise NotImplementedError(f"unknown study: {run.study!r} (expected 'spheres' or 'patient')")
+        raise NotImplementedError(f"unknown study: {run.study!r} (expected 'spheres', 'brainweb', or 'patient')")
 
     method_cls = METHOD_REGISTRY[run.method_name]
     if run.method_name == "gtm":
@@ -228,7 +285,6 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
                     f"but ROIs.nii.gz for subject {patient_ds.subject_id!r} contains no labelled voxels"
                 )
             regions = [patient_ds.rois == lbl for lbl in unique_labels]
-            # brain is the PET support; add background compartment if brain extends beyond ROIs
             brain = observed_arr > 0
             if not np.any(brain):
                 brain = np.ones_like(observed_arr, dtype=bool)
@@ -303,6 +359,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         "dataset": run.dataset,
         "sim": run.sim,
         "simulation": simulation_meta,
+        "guidance_condition": guidance_condition,
         "status": "complete",
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "git_rev": _git_rev(),
@@ -310,5 +367,6 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         "krl_studies_version": _pkg_version("krl-studies"),
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    marker = out_dir / ".done"
     marker.write_text(dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
     return out_dir

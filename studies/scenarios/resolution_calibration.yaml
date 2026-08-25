@@ -1,0 +1,19 @@
+study: spheres
+dataset:
+  kind: spheres
+  root: data/spheres
+sim:
+  seed: 1337
+  scanner: Siemens mMR
+  n_subits: 2
+inputs:
+  - kind: sirf_sim
+    params:
+      condition: [psf-none, psf-undersized, psf-matched]
+      beta: [null]
+      counts: [5.0e7, 1.0e8, 2.0e8]
+      realisation: [0]
+methods:
+  - name: post_smoothing
+    params: {sigma_mm: [0.0]}
+output: results/resolution_calibration

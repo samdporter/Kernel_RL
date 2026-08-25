@@ -2,7 +2,7 @@
 
 Convention (see data/README.md): one directory per subject under
 `data/patients/` containing `PET.nii.gz` and `T1.nii.gz`, optionally
-`ROIs.nii.gz`. Ground truth does not exist for patients by construction.
+`ROIs.nii.gz` and `T2.nii.gz`. Ground truth does not exist for patients by construction.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 
-_FILES = {"PET": "PET.nii.gz", "T1": "T1.nii.gz", "ROIs": "ROIs.nii.gz"}
+_FILES = {"PET": "PET.nii.gz", "T1": "T1.nii.gz", "ROIs": "ROIs.nii.gz", "T2": "T2.nii.gz"}
 
 
 def _load(path: Path) -> np.ndarray:
@@ -50,6 +50,7 @@ class PatientDataset:
             )
         self.pet = _load(self.dir / _FILES["PET"])
         self.guidance = _load(self.dir / _FILES["T1"])
+        self.t2 = _load(self.dir / _FILES["T2"]) if (self.dir / _FILES["T2"]).exists() else None
         roi_path = self.dir / _FILES["ROIs"]
         self.rois = _load(roi_path) if roi_path.exists() else None
         self.ground_truth = None

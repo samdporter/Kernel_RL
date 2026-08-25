@@ -8,8 +8,11 @@ package is missing, allowing test suites to skip gracefully on macOS.
 Outputs per subject (in ``out_dir``):
   - ``pet_gt.nii.gz``  ground-truth PET with optional tumours
   - ``mr_t1.nii.gz``   T1-weighted MR (lesion-free)
+  - ``mr_t2.nii.gz``   T2-weighted MR (lesion-free)
   - ``labels.nii.gz``  integer labels: 0 background, 1 CSF, 2 GM, 3 WM
   - ``mu_map.nii.gz``  attenuation map (mu in 1/cm) on the same grid as PET
+  - ``lesion_masks.npz``  compressed boolean tumour masks (n, z, y, x)
+  - ``lesion_diameters_mm.json``  list of tumour diameters in mm
 
 ``regions_from_labels`` converts the label volume into three boolean masks
 [WM, GM, CSF/background] suitable for iY/GMM PVC comparators. The third mask
@@ -20,6 +23,7 @@ the third mask with ``labels==0``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import nibabel as nib
@@ -79,8 +83,9 @@ def prepare_subject(
 
     Downloads/caches the BrainWeb volume via the ``brainweb`` pip package,
     builds PET ground truth (with optional tumours via
-    :mod:`krl_studies.datasets.lesions`), T1 MR and discrete tissue labels,
-    saves ``pet_gt.nii.gz``, ``mr_t1.nii.gz``, ``labels.nii.gz`` under
+    :mod:`krl_studies.datasets.lesions`), T1/T2 MR and discrete tissue labels,
+    saves ``pet_gt.nii.gz``, ``mr_t1.nii.gz``, ``mr_t2.nii.gz``, ``labels.nii.gz``,
+    ``mu_map.nii.gz``, ``lesion_masks.npz``, ``lesion_diameters_mm.json`` under
     ``out_dir`` and returns ``(paths, labels)``.
 
     Args:
@@ -95,9 +100,10 @@ def prepare_subject(
 
     Returns:
         (paths, labels) where ``paths`` is ``{"pet_gt": Path, "mr_t1": Path,
-        "labels": Path, "mu_map": Path}`` and ``labels`` is the ``(z,y,x)``
-        integer label array (0 BG, 1 CSF, 2 GM, 3 WM) matching the saved
-        PET/MR geometry.
+        "mr_t2": Path, "labels": Path, "mu_map": Path,
+        "lesion_masks": Path, "lesion_diameters_mm": Path}`` and ``labels`` is
+        the ``(z,y,x)`` integer label array (0 BG, 1 CSF, 2 GM, 3 WM) matching
+        the saved PET/MR geometry.
 
     Requires:
         ``pip install brainweb nibabel scipy scikit-image requests tqdm``
@@ -139,6 +145,7 @@ def prepare_subject(
     )
     pet = np.asarray(vol["PET"], dtype=np.float32)
     t1 = np.asarray(vol["T1"], dtype=np.float32)
+    t2 = np.asarray(vol["T2"], dtype=np.float32)
     u_map = np.asarray(vol["uMap"], dtype=np.float32)
 
     try:
@@ -182,21 +189,44 @@ def prepare_subject(
                 d2 = np.sum((coords - np.array([cz, cy, cx])) ** 2, axis=1)
                 nearest = coords[np.argmin(d2)]
                 spec["centre_zyx"] = tuple(float(v) for v in nearest)
-        pet_gt, _ = place_tumours(pet, specs, voxel_mm=voxel_mm)
+        pet_gt, lesion_masks = place_tumours(pet, specs, voxel_mm=voxel_mm)
     else:
         pet_gt = pet
+        specs = []
+        lesion_masks = []
+
+    # Save lesion masks and diameters for later use in CRC computation
+    mask_array = np.asarray(lesion_masks, dtype=bool)
+    if not tumour:
+        mask_array = np.empty((0, *pet.shape), dtype=bool)
+    np.savez_compressed(out_dir / "lesion_masks.npz", masks=mask_array)
+    (out_dir / "lesion_diameters_mm.json").write_text(json.dumps(
+        [float(spec["radius_mm"]) * 2.0 for spec in specs]
+    ))
 
     pet_path = out_dir / "pet_gt.nii.gz"
-    mr_path = out_dir / "mr_t1.nii.gz"
+    mr_t1_path = out_dir / "mr_t1.nii.gz"
+    mr_t2_path = out_dir / "mr_t2.nii.gz"
     label_path = out_dir / "labels.nii.gz"
     mu_path = out_dir / "mu_map.nii.gz"
+    lesion_masks_path = out_dir / "lesion_masks.npz"
+    lesion_diameters_path = out_dir / "lesion_diameters_mm.json"
 
     _save_nifti(pet_gt, pet_path, voxel_mm)
-    _save_nifti(t1, mr_path, voxel_mm)
+    _save_nifti(t1, out_dir / "mr_t1.nii.gz", voxel_mm)
+    _save_nifti(t2, mr_t2_path, voxel_mm)
     _save_nifti(labels, label_path, voxel_mm)
-    _save_nifti(u_map, mu_path, voxel_mm)
+    _save_nifti(u_map, out_dir / "mu_map.nii.gz", voxel_mm)
 
-    paths = {"pet_gt": pet_path, "mr_t1": mr_path, "labels": label_path, "mu_map": mu_path}
+    paths = {
+        "pet_gt": pet_path,
+        "mr_t1": out_dir / "mr_t1.nii.gz",
+        "mr_t2": mr_t2_path,
+        "labels": label_path,
+        "mu_map": out_dir / "mu_map.nii.gz",
+        "lesion_masks": lesion_masks_path,
+        "lesion_diameters_mm": lesion_diameters_path,
+    }
     return paths, labels
 
 
@@ -237,3 +267,65 @@ def regions_from_labels(labels: np.ndarray) -> list[np.ndarray]:
     if not np.any(brain):
         rest = ~(wm | gm)
     return [wm.astype(bool, copy=False), gm.astype(bool, copy=False), rest.astype(bool, copy=False)]
+
+
+class BrainWebDataset:
+    """Adapter to load a prepared BrainWeb subject directory."""
+
+    _FILES = {
+        "PET": "pet_gt.nii.gz",
+        "T1": "mr_t1.nii.gz",
+        "T2": "mr_t2.nii.gz",
+        "LABELS": "labels.nii.gz",
+        "MU_MAP": "mu_map.nii.gz",
+        "LESION_MASKS": "lesion_masks.npz",
+        "LESION_DIAMETERS": "lesion_diameters_mm.json",
+    }
+
+    def __init__(self, root: str | Path, subject_id: int | str):
+        self.dir = Path(root) / f"subject_{int(subject_id):02d}"
+        self.subject_id = int(subject_id)
+
+        self.pet_gt = _load(self.dir / self._FILES["PET"])
+        self.mr_t1 = _load(self.dir / self._FILES["T1"])
+        self.mr_t2 = _load(self.dir / self._FILES["T2"])
+        self.labels = _load(self.dir / self._FILES["LABELS"])
+        self.mu_map = _load(self.dir / self._FILES["MU_MAP"])
+
+        self.lesion_masks = self._load_lesion_masks()
+        self.lesion_diameters_mm = self._load_lesion_diameters()
+
+    @property
+    def ground_truth(self) -> np.ndarray:
+        return self.pet_gt
+
+    @property
+    def guidance(self) -> np.ndarray:
+        return self.mr_t1
+
+    @property
+    def t2(self) -> np.ndarray | None:
+        return self.mr_t2
+
+    @property
+    def voxel_mm(self) -> tuple[float, float, float]:
+        return tuple(float(v) for v in self.pet_gt.shape)
+
+    def _load_lesion_masks(self) -> np.ndarray:
+        path = self.dir / self._FILES["LESION_MASKS"]
+        if path.exists():
+            data = np.load(path)
+            return data["masks"].astype(bool)
+        return np.empty((0, *self.pet_gt.shape), dtype=bool)
+
+    def _load_lesion_diameters(self) -> list[float]:
+        path = self.dir / self._FILES["LESION_DIAMETERS"]
+        if path.exists():
+            return json.loads(path.read_text())
+        return []
+
+
+def _load(path: Path) -> np.ndarray:
+    import nibabel as nib
+    img = nib.load(str(path))
+    return np.transpose(img.get_fdata().astype(np.float32), (2, 1, 0))

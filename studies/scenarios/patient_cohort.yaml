@@ -1,0 +1,13 @@
+study: patient
+dataset:
+  kind: patient
+  root: data/patients
+  subject_id: MK-H001
+inputs:
+  - kind: native
+methods:
+  - name: rl
+    params: {fwhm_mm: 4.5, iterations: 20}
+  - name: krl
+    params: {fwhm_mm: 4.5, num_neighbours: 9, sigma_anat: 0.2, iterations: 20}
+output: results/patient_cohort

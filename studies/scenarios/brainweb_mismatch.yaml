@@ -1,0 +1,29 @@
+study: brainweb
+dataset:
+  kind: brainweb
+  root: data/brainweb
+  subject_id: 04
+sim:
+  seed: 1337
+  scanner: Siemens mMR
+  n_subits: 4
+inputs:
+  - kind: sirf_sim
+    params:
+      condition: [psf-none, psf-undersized, psf-matched]
+      beta: [null, 10.0, 50.0]
+      counts: [5.0e7, 1.0e8, 2.0e8]
+      realisation: [0, 1, 2]
+      guidance_condition: [exact, t2, shift_p2, shift_m2]
+methods:
+  - name: rl
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], iterations: 50}
+  - name: krl
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], sigma_anat: [0.2, 1.0], iterations: 50}
+  - name: hkrl
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], sigma_anat: [0.2, 1.0], sigma_emission: [0.5, 1.0], freeze_iteration: [5, 10], iterations: 50}
+  - name: dtv
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], alpha: [0.05, 0.1, 0.2], iterations: 100}
+  - name: iy
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], damping: [0.25, 0.5], iterations: 10}
+output: results/brainweb_mismatch
