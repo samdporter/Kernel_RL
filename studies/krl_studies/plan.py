@@ -9,7 +9,7 @@ from krl_studies.config import expand_scenario, load_scenario
 from krl_studies.runner.plan import write_run_plan
 
 
-def _plan_cli(argv=None) -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="krl_studies.plan",
         description="Generate JSONL run plans from scenarios, optionally create SGE scripts.",
@@ -43,4 +43,4 @@ def _plan_cli(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(_plan_cli())
+    sys.exit(main())

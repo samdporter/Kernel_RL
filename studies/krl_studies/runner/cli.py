@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
 from krl_studies.config import load_scenario
@@ -15,7 +16,7 @@ from krl_studies.runner.plan import read_run_plan
 def _execute_one(run, force: bool, out_root: Path | None = None) -> int:
     """Execute a single run, returning 0 on success, 1 on failure."""
     if out_root is not None:
-        run = run.replace(out_root=Path(out_root))
+        run = replace(run, out_root=Path(out_root))
     try:
         out = execute_run(run, force=force)
         print(f"    done -> {out}")
@@ -57,8 +58,8 @@ def main(argv=None) -> int:
             parser.error(f"--plan requires --index between 1 and {len(runs)}")
         run = runs[args.index - 1]
         if args.out is not None:
-            run = run.replace(out_root=Path(args.out))
-        return _execute_one(run, force=args.force, out_root=None)
+            run = replace(run, out_root=Path(args.out))
+        return _execute_one(run, force=args.force)
 
     # Scenario mode
     scenario = load_scenario(args.scenario)
@@ -79,9 +80,10 @@ def main(argv=None) -> int:
             print(f"[{i}/{len(runs)}] {run.run_id}  skip (marker present)")
             continue
         print(f"[{i}/{len(runs)}] {run.run_id}")
-        failures.append((run.run_id, 1)) if _execute_one(run, args.force) else None
+        if _execute_one(run, force=args.force) != 0:
+            failures.append(run.run_id)
 
-    for run_id, _ in failures:
+    for run_id in failures:
         print(f"FAILURE {run_id}")
     return 1 if failures else 0
 

@@ -30,6 +30,11 @@ analysis = [
 where = ["."]
 include = ["krl_studies*"]
 
+[project.scripts]
+krl-studies-run = "krl_studies.runner.cli:main"
+krl-studies-report = "krl_studies.report:main"
+krl-studies-plan = "krl_studies.plan:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]

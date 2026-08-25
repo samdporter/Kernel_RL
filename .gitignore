@@ -62,4 +62,6 @@ obsolete/
 data/patients/
 data/brainweb/
 results/
+plans/
+analysis/
 studies/uv.lock

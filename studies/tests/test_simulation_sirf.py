@@ -90,6 +90,8 @@ def test_simulate_inputs_shapes_and_determinism():
     cfg = _sim_cfg()
     a, meta_a = simulate_inputs(gt, dict(cfg))
     b, meta_b = simulate_inputs(gt, dict(cfg))
+    # Bit-identical under the pinned harness (OMP_NUM_THREADS=1, see
+    # docs/reference/SIRF_API_NOTES.md); run via make study-sirf-test.
     assert np.array_equal(a, b)
     assert a.shape == gt.shape
     assert a.min() >= 0

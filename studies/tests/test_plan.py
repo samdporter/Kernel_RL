@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from krl_studies.config import RunSpec
-from krl_studies.plan import _plan_cli as main
+from krl_studies.plan import main
 from krl_studies.runner.plan import read_run_plan, write_run_plan
 
 # Skip tests that require CLI subprocess on macOS (no CIL)
