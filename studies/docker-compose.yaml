@@ -14,3 +14,12 @@ services:
       bash -lc "export OMP_NUM_THREADS=1 &&
                 pip install -q -e '.' -e './studies[dev]' &&
                 python -m pytest studies/tests -m sirf -v"
+
+  study:
+    # Study execution service for running campaigns (Task 6).
+    platform: linux/amd64
+    image: synerbi/sirf@sha256:643c7955717ac08c6f44c6d3fe2ef064ebb54167f1da68771ed3e6dc07caf58d
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    entrypoint: ["bash", "/workspace/studies/scripts/container_entrypoint.sh"]

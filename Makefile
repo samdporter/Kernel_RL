@@ -1,14 +1,22 @@
-.PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint study-docker-pull study-sirf-test study-docker-python
+.PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint study-docker-pull study-sirf-test study-docker-python study-docker-run
 
 help:
 	@echo "cil-krl development commands"
 	@echo "============================"
-	@echo "  make install   - install package editable with dev tools (uv)"
-	@echo "  make test      - run CPU test suite"
-	@echo "  make gpu-test  - run GPU test suite (needs CUDA; opt-in)"
-	@echo "  make lint      - ruff check"
-	@echo "  make format    - ruff autofix"
-	@echo "  make build     - build sdist and wheel"
+	@echo "  make install           - install package editable with dev tools (uv)"
+	@echo "  make test              - run CPU test suite"
+	@echo "  make gpu-test          - run GPU test suite (needs CUDA; opt-in)"
+	@echo "  make lint              - ruff check"
+	@echo "  make format            - ruff autofix"
+	@echo "  make build             - build sdist and wheel"
+	@echo ""
+	@echo "  make study-install     - install studies package editable with dev tools (uv)"
+	@echo "  make study-test        - run study tests (native)"
+	@echo "  make study-lint        - ruff check studies/"
+	@echo "  make study-docker-pull - pull pinned SIRF image"
+	@echo "  make study-sirf-test   - run SIRF tests in container"
+	@echo "  make study-docker-python - open python shell in SIRF container"
+	@echo "  make study-docker-run  - run a study scenario in container (SCENARIO=path ARGS=... required)"
 
 install:
 	uv pip install -e ".[dev]"
@@ -45,3 +53,7 @@ study-sirf-test:
 
 study-docker-python:
 	docker compose -f studies/docker-compose.yaml run --rm sirf bash
+
+study-docker-run:
+	test -n "$(SCENARIO)"
+	docker compose -f studies/docker-compose.yaml run --rm study --scenario "$(SCENARIO)" $(ARGS)
