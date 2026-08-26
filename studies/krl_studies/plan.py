@@ -28,10 +28,11 @@ def main(argv=None) -> int:
     write_run_plan(runs, args.out)
     print(f"Wrote {len(runs)} runs to {args.out}")
 
-    # Optionally write SGE script
+    # Optionally write SGE script; absolute path so array tasks are
+    # independent of the submitter's current directory.
     if args.sge is not None:
         write_sge_array_script(
-            plan_path=args.out,
+            plan_path=args.out.resolve(),
             script_path=args.sge,
             n_runs=len(runs),
             gpu=args.gpu,

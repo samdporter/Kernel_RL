@@ -15,6 +15,7 @@ inputs:
       counts: [5.0e7, 1.0e8, 2.0e8]
       realisation: [0, 1, 2]
       guidance_condition: [exact, t2, shift_p2, shift_m2]
+      attenuation_path: data/brainweb/subject_04/mu_map.nii.gz
 methods:
   - name: rl
     params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], iterations: 50}
