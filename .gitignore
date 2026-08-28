@@ -65,3 +65,6 @@ results/
 plans/
 analysis/
 studies/uv.lock
+
+# invalidated artifacts from 2026-08-27 readiness review
+invalidated_2026-08-27/
