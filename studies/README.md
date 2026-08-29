@@ -263,6 +263,10 @@ runs raise a clear error. Optional `T2.nii.gz` enables `guidance_condition: t2`.
 - Done (Plan 3): aggregated tidy results store, publication figures/tables,
   SGE + docker orchestration, attenuation/uMap modelling.
 
+## ⚠️ Pre-2026-08-27 artifacts are quarantined
+
+Results, plans, and prepared data from before the Phase 0+2+3 readiness fixes are invalidated and quarantined in `../invalidated_2026-08-27/` with a README explaining the defects. Do not use them for any paper figures or analysis. Regenerate from a tagged revision after the fixes land.
+
 ## Analysis optional dependencies
 
 For plotting, tables, and report generation:

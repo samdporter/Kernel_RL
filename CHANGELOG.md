@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-08-27
+
+### Fixed
+- **HKRL hybrid activation**: `HKRLMethod` now enables `hybrid=True` when `sigma_emission > 0`; mismatch scenarios include `hybrid: true`. Previously HKRL runs were static KRL variants.
+- **HKRL per-iteration emission capture**: Iterates are now recorded in emission domain using the kernel state from that iteration, not the final kernel. Pre-freeze curves are now correct.
+- **Freeze timing**: `freeze_iteration=N` now freezes after N completed CIL updates (previously one update late).
+- **Kernel operator validation**: `num_neighbours` must be positive odd integer; `sigma_anat`, `sigma_dist`, `sigma_emission` must be non-negative.
+- **BrainWeb physical geometry**: `BrainWebDataset.voxel_mm` now reads voxel spacing from NIfTI affine; affine preserved on save/load. Runner lesion-mask truth-value error fixed.
+- **SIRF activity scale**: `simulate_inputs` records `scale` in manifest; contract test validates high-count invariance.
+
+### Changed
+- Quarantined pre-fix local artifacts (`results/`, `plans/`, `data/brainweb/`, `data/patients/MK-H001/`) into `invalidated_2026-08-27/` with README. These must not be reused.
+- Added `tools/quarantine_invalidated_artifacts.sh` for idempotent quarantine.
+
+See `docs/superpowers/specs/2026-08-27-phase-0-2-3-readiness-fixes-design.md` for design.
+
 ## [0.2.0] - 2026-08-23
 
 Plugin release: the package is restructured for distribution as a CIL plugin.
