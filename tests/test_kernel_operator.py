@@ -786,3 +786,21 @@ def test_precomputed_weights_consistency(geometry, backend, use_mask, hybrid, di
 
     # Results should be identical (using cached weights)
     assert np.allclose(result1, result2, atol=1e-14, rtol=1e-14)
+
+
+def test_kernel_operator_rejects_even_neighbourhood(geometry):
+    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
+        get_kernel_operator(geometry, backend="numba", num_neighbours=4)
+
+
+def test_kernel_operator_rejects_zero_or_negative_neighbourhood(geometry):
+    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
+        get_kernel_operator(geometry, backend="numba", num_neighbours=0)
+    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
+        get_kernel_operator(geometry, backend="numba", num_neighbours=-3)
+
+
+def test_kernel_operator_rejects_negative_sigma(geometry):
+    for param in ("sigma_anat", "sigma_dist", "sigma_emission"):
+        with pytest.raises(ValueError, match=f"{param} must be non-negative"):
+            get_kernel_operator(geometry, backend="numba", **{param: -0.5})

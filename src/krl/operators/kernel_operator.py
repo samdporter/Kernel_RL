@@ -106,7 +106,7 @@ class BaseKernelOperator(LinearOperator):
     def __init__(self, domain_geometry, **kwargs):
         super().__init__(domain_geometry=domain_geometry, range_geometry=domain_geometry)
         default_parameters = DEFAULT_PARAMETERS.copy()
-        self.parameters = default_parameters | kwargs
+        self.parameters = {}
         self.anatomical_image = None
         self.mask = None
         self.backend = "numba"
@@ -115,8 +115,18 @@ class BaseKernelOperator(LinearOperator):
         self._normalisation_map = None
         self._full_mask_cache: np.ndarray | None = None
         self._anatomical_weights: np.ndarray | None = None
+        self.set_parameters(default_parameters | kwargs)
 
     def set_parameters(self, parameters):
+        # Validate before applying
+        n = parameters.get("num_neighbours", self.parameters.get("num_neighbours"))
+        if n is not None:
+            if not isinstance(n, int) or n <= 0 or n % 2 == 0:
+                raise ValueError("num_neighbours must be a positive odd integer")
+        for sigma_key in ("sigma_anat", "sigma_dist", "sigma_emission"):
+            s = parameters.get(sigma_key, self.parameters.get(sigma_key))
+            if s is not None and s < 0:
+                raise ValueError(f"{sigma_key} must be non-negative")
         self.parameters.update(parameters)
         self.mask = None
         self._anatomical_weights = None
