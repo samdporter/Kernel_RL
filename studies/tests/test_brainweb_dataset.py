@@ -28,6 +28,35 @@ except ImportError:
     HAS_NIB = False
 
 
+# ------------------------------------------------------------------ voxel_mm test
+def test_voxel_mm_comes_from_nifti_affine(tmp_path):
+    from krl_studies.datasets.brainweb import BrainWebDataset, _save_nifti
+    import nibabel as nib
+
+    # Create a synthetic subject with known voxel size
+    custom_voxel = (2.1, 2.2, 2.3)  # z, y, x mm
+    shape = (10, 20, 30)
+    arr = np.ones(shape, dtype=np.float32)
+    affine = np.diag([custom_voxel[2], custom_voxel[1], custom_voxel[0], 1.0]).astype(np.float32)
+    subj_dir = tmp_path / "subject_99"
+    subj_dir.mkdir(parents=True)
+    for fname in ["pet_gt.nii.gz", "mr_t1.nii.gz", "mr_t2.nii.gz", "labels.nii.gz", "mu_map.nii.gz"]:
+        nii = nib.Nifti1Image(np.transpose(arr, (2, 1, 0)), affine)
+        nib.save(nii, str(subj_dir / fname))
+    # lesion files
+    np.savez_compressed(subj_dir / "lesion_masks.npz", masks=np.zeros((0, *shape), dtype=bool))
+    (subj_dir / "lesion_diameters_mm.json").write_text("[]")
+
+    ds = BrainWebDataset(tmp_path, 99)
+    assert ds.voxel_mm == pytest.approx(custom_voxel, rel=1e-6), f"Expected {custom_voxel}, got {ds.voxel_mm}"
+
+    # Round-trip save/load preserves affine
+    reloaded = nib.load(str(subj_dir / "pet_gt.nii.gz"))
+    reloaded_voxel = nib.affines.voxel_sizes(reloaded.affine)
+    reloaded_voxel_zyx = (float(reloaded_voxel[2]), float(reloaded_voxel[1]), float(reloaded_voxel[0]))
+    assert reloaded_voxel_zyx == pytest.approx(custom_voxel, rel=1e-6)
+
+
 # ------------------------------------------------------------------ pure test
 def test_regions_from_labels_partitions_brain():
     from krl_studies.datasets.brainweb import regions_from_labels

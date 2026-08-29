@@ -286,7 +286,19 @@ class BrainWebDataset:
         self.dir = Path(root) / f"subject_{int(subject_id):02d}"
         self.subject_id = int(subject_id)
 
-        self.pet_gt = _load(self.dir / self._FILES["PET"])
+        # Load PET first to get affine/voxel_mm
+        pet_path = self.dir / self._FILES["PET"]
+        if not pet_path.exists():
+            raise FileNotFoundError(
+                f"{pet_path} not found. See data/README.md for BrainWeb preparation."
+            )
+        pet_nii = nib.load(str(pet_path))
+        self._pet_affine = pet_nii.affine
+        self._pet_voxel_mm = tuple(float(v) for v in nib.affines.voxel_sizes(pet_nii.affine))
+        # Ensure z,y,x order
+        self._pet_voxel_mm_zyx = (self._pet_voxel_mm[2], self._pet_voxel_mm[1], self._pet_voxel_mm[0])
+
+        self.pet_gt = _load(pet_path)
         self.mr_t1 = _load(self.dir / self._FILES["T1"])
         self.mr_t2 = _load(self.dir / self._FILES["T2"])
         self.labels = _load(self.dir / self._FILES["LABELS"])
@@ -309,7 +321,11 @@ class BrainWebDataset:
 
     @property
     def voxel_mm(self) -> tuple[float, float, float]:
-        return tuple(float(v) for v in self.pet_gt.shape)
+        return self._pet_voxel_mm_zyx
+
+    @property
+    def affine(self) -> np.ndarray | None:
+        return self._pet_affine
 
     def _load_lesion_masks(self) -> np.ndarray:
         path = self.dir / self._FILES["LESION_MASKS"]
