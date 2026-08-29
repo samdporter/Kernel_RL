@@ -30,8 +30,9 @@ except ImportError:
 
 # ------------------------------------------------------------------ voxel_mm test
 def test_voxel_mm_comes_from_nifti_affine(tmp_path):
-    from krl_studies.datasets.brainweb import BrainWebDataset, _save_nifti
     import nibabel as nib
+
+    from krl_studies.datasets.brainweb import BrainWebDataset
 
     # Create a synthetic subject with known voxel size
     custom_voxel = (2.1, 2.2, 2.3)  # z, y, x mm

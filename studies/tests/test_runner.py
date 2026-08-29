@@ -94,6 +94,7 @@ def test_force_failure_removes_marker(tmp_path, monkeypatch):
 def test_runner_brainweb_lesion_truth_fix(tmp_path):
     """Runner must not raise ValueError on non-empty lesion_masks array."""
     import numpy as np
+
     from krl_studies.config import RunSpec
     from krl_studies.runner.execute import execute_run
 
