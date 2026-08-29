@@ -205,7 +205,10 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         voxel_mm = ds.voxel_mm
 
         # Persisted tumour masks for CRC
-        lesion_masks = ds.lesion_masks if ds.lesion_masks.size > 0 else []
+        lesion_masks_arr = ds.lesion_masks
+        lesion_masks = lesion_masks_arr if isinstance(lesion_masks_arr, list) else []
+        if len(lesion_masks) == 0 and lesion_masks_arr is not None and lesion_masks_arr.size > 0:
+            lesion_masks = [lesion_masks_arr]
         lesion_labels = [int(d) for d in ds.lesion_diameters_mm] if ds.lesion_diameters_mm else []
 
         observed_arr, simulation_meta = _build_observed(run, ds, gt)
@@ -214,7 +217,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         lesion_rois = ds.lesion_masks if ds.lesion_masks.size > 0 else derive_lesion_rois(gt)
         exclusion = (
             np.logical_or.reduce(lesion_masks)
-            if lesion_masks
+            if len(lesion_masks) > 0
             else np.zeros_like(gt, dtype=bool)
         )
         vois = background_vois(gt.shape, exclude_mask=exclusion)

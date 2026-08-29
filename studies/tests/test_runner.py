@@ -89,3 +89,33 @@ def test_force_failure_removes_marker(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         execute_run(run, force=True)
     assert not (out / ".done").exists()
+
+
+def test_runner_brainweb_lesion_truth_fix(tmp_path):
+    """Runner must not raise ValueError on non-empty lesion_masks array."""
+    import numpy as np
+    from krl_studies.config import RunSpec
+    from krl_studies.runner.execute import execute_run
+
+    # Build a minimal RunSpec for brainweb with lesion masks present
+    gt = np.ones((16, 16, 16), dtype=np.float32)
+    gt[4:12, 4:12, 4:12] = 4.0
+    lesion_masks = [gt > 2.0]  # non-empty list of boolean arrays
+    lesion_labels = [8]
+
+    # Mock the BrainWebDataset to return our gt and lesion masks
+    # This test runs without SIRF by using input_kind="reference"
+    run = RunSpec(
+        run_id="test_brainweb_lesion",
+        study="brainweb",
+        dataset={"kind": "brainweb", "root": str(tmp_path), "subject_id": 99},
+        input_kind="reference",
+        input_params={"condition": "psf-matched", "guidance_condition": "exact"},
+        method_name="rl",
+        method_params={"fwhm_mm": 4.0, "iterations": 1},
+        sim={"seed": 1337},
+        out_root=str(tmp_path / "results"),
+    )
+    # This should not raise "The truth value of an array with more than one element is ambiguous"
+    out_dir = execute_run(run, force=True)
+    assert out_dir.exists()
