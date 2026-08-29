@@ -111,7 +111,7 @@ class _KernelMethod(Method):
         kernel_op = get_kernel_operator(observed, backend=params.get("backend", "numba"))
         kernel_op.set_parameters(_kernel_params(params))
         kernel_op.set_anatomical_image(guidance)
-        captured: list[Iterate] = []
+
         algo = RichardsonLucy(
             initial_estimate=observed,
             blurring_operator=blur,
@@ -122,16 +122,38 @@ class _KernelMethod(Method):
             update_objective_interval=1,
         )
 
-        def generate():
-            algo.run(iterations=int(n_iterations), verbose=0, callbacks=[_Capture(captured)])
-            # KRL operates on a latent image; map iterates to emission domain.
-            for it in captured:
-                latent = algo.x.geometry.allocate()
-                latent.fill(it.image)
+        captured: list[Iterate] = []
+
+        class _CaptureEmission(Callback):
+            def __call__(self, algorithm) -> None:
+                # CIL fires the callback once before the first update (iteration 0,
+                # initial estimate); only post-update iterates belong to the stream.
+                if int(algorithm.iteration) < 1:
+                    return
+                # Capture emission-domain iterate using current kernel state
+                latent = algorithm.x.geometry.allocate()
+                latent.fill(algorithm.x.as_array().copy())
                 deconv = kernel_op.direct(latent)
                 arr = get_array(deconv).astype(np.float32)
                 arr[arr < 0] = 0.0
-                yield Iterate(it.iteration, arr, it.objective)
+                obj = None
+                loss = getattr(algorithm, "loss", None)
+                if loss:
+                    try:
+                        obj = float(loss[-1])
+                    except (TypeError, ValueError, IndexError):
+                        obj = None
+                captured.append(
+                    Iterate(
+                        iteration=int(algorithm.iteration),
+                        image=arr,
+                        objective=obj,
+                    )
+                )
+
+        def generate():
+            algo.run(iterations=int(n_iterations), verbose=0, callbacks=[_CaptureEmission()])
+            yield from captured
 
         return generate()
 

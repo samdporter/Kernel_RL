@@ -147,3 +147,27 @@ def test_hkrl_hybrid_activation_and_difference_from_krl(observed_pair):
     for it in hkrl_iters:
         assert np.all(np.isfinite(it.image))
         assert np.all(it.image >= 0)
+
+
+def test_hkrl_emission_domain_iterates_use_per_iteration_kernel(observed_pair):
+    """With hybrid + freeze, iterates after freeze must use the frozen kernel."""
+    d = observed_pair
+    obs, mr = _load(d, "obs.nii"), _load(d, "mr.nii")
+    params = {
+        "fwhm_mm": 3.0, "backend": "numba",
+        "sigma_anat": 1.0, "sigma_emission": 1.0,
+        "freeze_iteration": 1, "num_neighbours": 5,
+    }
+    iters = list(HKRLMethod().run(_as_cil(obs), _as_cil(mr), params, 4))
+    assert len(iters) == 4
+    # After freeze_iteration=1, the kernel operator is fixed; post-freeze drift
+    # should be smaller than pre-freeze drift (which includes kernel changes).
+    # Pre-freeze drift (iteration 1->2, kernel changes during iteration 2)
+    pre_freeze_drift = np.abs(iters[0].image - iters[1].image).max()
+    # Post-freeze drifts (iterations 2->3 and 3->4, kernel fixed)
+    diff_23 = np.abs(iters[1].image - iters[2].image).max()
+    diff_34 = np.abs(iters[2].image - iters[3].image).max()
+    assert diff_23 < pre_freeze_drift, f"post-freeze drift {diff_23} >= pre-freeze {pre_freeze_drift}"
+    assert diff_34 < pre_freeze_drift, f"post-freeze drift {diff_34} >= pre-freeze {pre_freeze_drift}"
+    # Drift should decrease as RL converges with fixed kernel
+    assert diff_34 < diff_23, f"drift not decreasing: {diff_34} >= {diff_23}"
