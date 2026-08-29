@@ -22,7 +22,7 @@ methods:
   - name: krl
     params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], sigma_anat: [0.2, 1.0], iterations: 50}
   - name: hkrl
-    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], sigma_anat: [0.2, 1.0], sigma_emission: [0.5, 1.0], freeze_iteration: [5, 10], iterations: 50}
+    params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], sigma_anat: [0.2, 1.0], sigma_emission: [0.5, 1.0], freeze_iteration: [5, 10], hybrid: true, iterations: 50}
   - name: dtv
     params: {fwhm_mm: [4.0, 5.0, 5.7, 6.5, 7.5], alpha: [0.05, 0.1, 0.2], iterations: 100}
   - name: iy

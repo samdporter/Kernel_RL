@@ -149,6 +149,16 @@ class HKRLMethod(_KernelMethod):
     name = "hkrl"
 
     def run(self, observed, guidance, params, n_iterations) -> Iterator[Iterate]:
+        # Enable hybrid if user provides sigma_emission > 0; otherwise raise if freeze requested
+        freeze_it = int(params.get("freeze_iteration", 1))
+        sigma_em = float(params.get("sigma_emission", 0.0))
+        if sigma_em <= 0 and freeze_it > 0:
+            raise ValueError("HKRL with freeze_iteration > 0 requires sigma_emission > 0 (hybrid mode)")
+        kernel_params = dict(_kernel_params(params))
+        kernel_params["hybrid"] = sigma_em > 0
+        # Pass through so wrapper validates
+        params_with_hybrid = dict(params)
+        params_with_hybrid["hybrid"] = kernel_params["hybrid"]
         return self._run_kernel(
-            observed, guidance, params, n_iterations, freeze_iteration=params.get("freeze_iteration", 1)
+            observed, guidance, params_with_hybrid, n_iterations, freeze_iteration=freeze_it
         )

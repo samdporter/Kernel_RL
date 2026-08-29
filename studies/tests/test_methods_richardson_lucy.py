@@ -125,3 +125,25 @@ def test_krl_requires_guidance(observed_pair):
     obs = _load(d, "obs.nii")
     with pytest.raises(ValueError, match="guidance"):
         KRLMethod().run(_as_cil(obs), None, {"fwhm_mm": 3.0, "sigma_anat": 1.0}, 1)
+
+
+def test_hkrl_hybrid_activation_and_difference_from_krl(observed_pair):
+    d = observed_pair
+    obs, mr = _load(d, "obs.nii"), _load(d, "mr.nii")
+    common = {"fwhm_mm": 3.0, "backend": "numba", "sigma_anat": 1.0, "num_neighbours": 5}
+    krl_iters = list(
+        KRLMethod().run(
+            _as_cil(obs), _as_cil(mr), {**common, "sigma_emission": 1.0, "freeze_iteration": 0}, 5
+        )
+    )
+    hkrl_iters = list(
+        HKRLMethod().run(
+            _as_cil(obs), _as_cil(mr), {**common, "sigma_emission": 1.0, "freeze_iteration": 0}, 5
+        )
+    )
+    # HKRL must produce different iterates than KRL when hybrid emission weight is active
+    assert not np.allclose(krl_iters[-1].image, hkrl_iters[-1].image, rtol=1e-4)
+    # All iterates finite and non-negative
+    for it in hkrl_iters:
+        assert np.all(np.isfinite(it.image))
+        assert np.all(it.image >= 0)
