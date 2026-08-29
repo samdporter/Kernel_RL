@@ -24,6 +24,9 @@ class DummyGeometry:
     """Minimal geometry mock for testing."""
     def __init__(self, shape):
         self.shape = shape
+        self.voxel_size_x = 1.0
+        self.voxel_size_y = 1.0
+        self.voxel_size_z = 1.0
 
     def allocate(self, value=0.0):
         data = np.full(self.shape, value, dtype=np.float64)
@@ -32,8 +35,9 @@ class DummyGeometry:
 
 class DummyImage:
     """Minimal image mock for testing."""
-    def __init__(self, data):
+    def __init__(self, data, geometry=None):
         self._data = np.asarray(data, dtype=np.float64)
+        self.geometry = geometry or DummyGeometry(data.shape)
 
     @property
     def shape(self):
@@ -43,10 +47,64 @@ class DummyImage:
         return self._data
 
     def clone(self):
-        return DummyImage(self._data.copy())
+        return DummyImage(self._data.copy(), self.geometry)
 
     def fill(self, values):
         self._data[...] = np.asarray(values, dtype=np.float64)
+
+    def __truediv__(self, other):
+        if isinstance(other, DummyImage):
+            return DummyImage(self._data / (other._data + 1e-10), self.geometry)
+        return DummyImage(self._data / other, self.geometry)
+
+    def __mul__(self, other):
+        if isinstance(other, DummyImage):
+            return DummyImage(self._data * other._data, self.geometry)
+        return DummyImage(self._data * other, self.geometry)
+
+    def __add__(self, other):
+        if isinstance(other, DummyImage):
+            return DummyImage(self._data + other._data, self.geometry)
+        return DummyImage(self._data + other, self.geometry)
+
+    def __radd__(self, other):
+        return self.__add__(other)
+
+    def __sub__(self, other):
+        if isinstance(other, DummyImage):
+            return DummyImage(self._data - other._data, self.geometry)
+        return DummyImage(self._data - other, self.geometry)
+
+    def __rsub__(self, other):
+        if isinstance(other, DummyImage):
+            return DummyImage(other._data - self._data, self.geometry)
+        return DummyImage(other - self._data, self.geometry)
+
+    def __imul__(self, other):
+        if isinstance(other, DummyImage):
+            self._data *= other._data
+        else:
+            self._data *= other
+        return self
+
+    def __idiv__(self, other):
+        if isinstance(other, DummyImage):
+            self._data /= (other._data + 1e-10)
+        else:
+            self._data /= other
+        return self
+
+    def log(self):
+        return DummyImage(np.log(self._data + 1e-10), self.geometry)
+
+    def sum(self):
+        return self._data.sum()
+
+    def maximum(self, value, out=None):
+        result = np.maximum(self._data, value)
+        if out is not None:
+            out._data[...] = result
+        return DummyImage(result, self.geometry)
 
 
 @pytest.fixture
@@ -420,6 +478,46 @@ def test_richardson_lucy_style_iteration_with_freezing(geometry, anatomical_imag
 
     # Iteration 0 should be different from frozen state
     assert not np.allclose(frozen_refs[0], frozen_refs[1], rtol=1e-10)
+
+
+def test_freeze_iteration_timing_through_cil_lifecycle(geometry, anatomical_image, emission_v1, emission_v2):
+    """freeze_iteration=N means freeze AFTER N completed updates (CIL lifecycle)."""
+    pytest.importorskip("cil")
+    from krl.algorithms.richardson_lucy import RichardsonLucy
+    from krl.operators.blurring import create_gaussian_blur
+
+    # Create a real-ish blurring operator on the dummy geometry
+    blur = create_gaussian_blur(sigma=(1.0, 1.0, 1.0), geometry=geometry, backend="numba")
+
+    kernel_op = get_kernel_operator(
+        geometry, backend="numba",
+        num_neighbours=3, sigma_anat=1.0, sigma_emission=1.0,
+        normalize_kernel=True, hybrid=True, use_mask=False,
+    )
+    kernel_op.set_anatomical_image(anatomical_image)
+
+    algo = RichardsonLucy(
+        initial_estimate=emission_v1,
+        blurring_operator=blur,
+        observed_data=emission_v1,
+        kernel_operator=kernel_op,
+        freeze_iteration=1,
+        update_objective_interval=1,
+    )
+
+    # Before any updates, not frozen
+    assert kernel_op.freeze_emission_kernel is False
+
+    # Run exactly 1 iteration through CIL
+    algo.run(iterations=1, verbose=0)
+
+    # After 1 iteration, kernel should now be frozen (freeze_iteration=1 means freeze AFTER 1 update)
+    assert kernel_op.freeze_emission_kernel is True, "Expected freeze after 1 completed update"
+
+    # Second iteration should use frozen operator (no change to frozen reference)
+    frozen_ref = kernel_op.frozen_emission_kernel.copy()
+    algo.run(iterations=1, verbose=0)
+    np.testing.assert_array_equal(kernel_op.frozen_emission_kernel, frozen_ref)
 
 
 if __name__ == "__main__":

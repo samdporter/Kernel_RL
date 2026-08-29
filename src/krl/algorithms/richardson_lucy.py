@@ -158,12 +158,12 @@ class RichardsonLucy(Algorithm):
             self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
 
         # Handle freezing AFTER the iteration completes
-        # Note: self.iteration is incremented AFTER this method returns (in CIL's __next__)
-        # So when self.iteration == freeze_iteration, this is the freeze iteration itself
-        # We freeze AFTER this iteration, so that iteration+1 uses this iteration's emission state
+        # CIL increments self.iteration AFTER this method returns.
+        # freeze_iteration=N means freeze AFTER N completed updates.
+        # So when self.iteration == freeze_iteration - 1 (before increment), this was the N-th update.
         if (
             self.freeze_iteration > 0
-            and self.iteration == self.freeze_iteration
+            and self.iteration == self.freeze_iteration - 1
             and self.kernel_operator is not None
         ):
             self.kernel_operator.freeze_emission_kernel = True
