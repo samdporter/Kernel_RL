@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import numpy as np
@@ -162,3 +163,55 @@ def test_sirf_sim_end_to_end_tiny_metrics(tmp_path):
     manifest = json.loads((out / "manifest.json").read_text())
     assert manifest["input_kind"] == "sirf_sim"
     assert manifest["input_params"]["condition"] == "psf-matched"
+
+
+@pytest.mark.sirf
+@pytest.mark.skipif(not HAS_SIRF, reason="SIRF not available")
+def test_sirf_sim_input_cache_shared_across_methods(tmp_path):
+    """Two methods sharing the same simulated input must read one cached observed image."""
+    from krl_studies.config import RunSpec
+    from krl_studies.runner.execute import execute_run
+
+    gt = np.full((64, 64, 64), 1.0, dtype=np.float32)
+    gt[24:40, 24:40, 24:40] = 6.0
+    d = tmp_path / "spheres"
+    d.mkdir()
+    write_test_nifti(d / "phant_orig.nii", gt)
+    write_test_nifti(d / "phant_mri.nii", np.full_like(gt, 0.5))
+    write_test_nifti(d / "phant_pet.nii", gt * 0.95)
+
+    dataset = {"kind": "spheres", "root": str(d)}
+    sim = {"seed": 0, "scanner": "Siemens mMR"}
+    input_params = {
+        "condition": "psf-matched",
+        "beta": None,
+        "counts": 1e5,
+        "realisation": 0,
+        "n_subits": 2,
+    }
+    out_root = str(tmp_path / "results")
+
+    runs = [
+        RunSpec(
+            run_id=f"cache_sirf_{name}",
+            study="spheres",
+            dataset=dataset,
+            input_kind="sirf_sim",
+            input_params=input_params,
+            method_name="post_smoothing",
+            method_params={"sigma_mm": 2.0} if name == "a" else {"sigma_mm": 4.0},
+            sim=sim,
+            out_root=out_root,
+        )
+        for name in ("a", "b")
+    ]
+
+    for run in runs:
+        execute_run(run, force=True)
+
+    manifest_a = json.loads((tmp_path / "results" / runs[0].run_id / "manifest.json").read_text())
+    manifest_b = json.loads((tmp_path / "results" / runs[1].run_id / "manifest.json").read_text())
+    assert "input_id" in manifest_a and "input_id" in manifest_b
+    assert "observed_sha256" in manifest_a and "observed_sha256" in manifest_b
+    assert manifest_a["input_id"] == manifest_b["input_id"]
+    assert manifest_a["observed_sha256"] == manifest_b["observed_sha256"]

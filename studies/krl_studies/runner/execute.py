@@ -79,7 +79,8 @@ def _wrap(arr: np.ndarray, voxel_mm) -> Any:
     return img
 
 
-def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+def _simulate_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """Run the underlying simulation for ``run`` (no cache lookup)."""
     if run.input_kind == "reference":
         return ds.reference_pet, {}
     if run.input_kind == "quick_sim":
@@ -110,6 +111,43 @@ def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np
         recon, meta = simulate_inputs(gt, cfg)
         return recon, meta
     raise ValueError(f"unknown input kind: {run.input_kind}")
+
+
+def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np.ndarray, dict[str, Any]]:
+    """Return (observed_array, sim_meta), reusing the canonical cache when possible.
+
+    Method name and method params are excluded from the cache key so that all
+    methods sharing the same simulated acquisition share one cache entry.
+    """
+    from krl_studies.runner import cache as cache_mod
+
+    identity = cache_mod.build_input_identity(run)
+    input_id = cache_mod.compute_input_id(identity)
+    cached = cache_mod.read_entry(run.out_root, input_id, identity)
+    if cached is not None:
+        return cached
+    observed, meta = _simulate_observed(run, ds, gt)
+    cache_mod.write_entry(run.out_root, input_id, observed, meta, identity=identity)
+    return observed, meta
+
+
+def _input_id_for_run(run: RunSpec) -> str:
+    from krl_studies.runner import cache as cache_mod
+
+    return cache_mod.compute_input_id(cache_mod.build_input_identity(run))
+
+
+def _observed_sha256_for_run(run: RunSpec) -> str | None:
+    """Return the cached observed SHA256 for ``run``, or None if no cache entry."""
+    from krl_studies.runner import cache as cache_mod
+
+    identity = cache_mod.build_input_identity(run)
+    input_id = cache_mod.compute_input_id(identity)
+    entry = cache_mod.cache_dir(run.out_root) / input_id
+    sha_path = entry / "data.sha256"
+    if not sha_path.exists():
+        return None
+    return sha_path.read_text().strip()
 
 
 def _iy_region_defaults(gt: np.ndarray) -> tuple[list[np.ndarray], np.ndarray]:
@@ -366,6 +404,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         "dataset": run.dataset,
         "sim": run.sim,
         "simulation": simulation_meta,
+        "input_id": _input_id_for_run(run),
+        "observed_sha256": _observed_sha256_for_run(run),
         "guidance_condition": guidance_condition,
         "status": "complete",
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
