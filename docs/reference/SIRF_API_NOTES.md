@@ -207,6 +207,13 @@ identical counts, different seed differs. STIR's `PoissonNoiseGenerator` is
 recorded above as unusable (error path + non-reproducible `process`). Callers
 (Task 3) scale prompts to the target count total *before* calling.
 
+`simulate_inputs` rescales the OSEM reconstruction back to ground-truth
+units by dividing by the prompt scaling factor, so the returned image is
+directly comparable to the caller's GT/guidance array. The metadata records
+`prompt_scale` (the linear count-scale factor applied to prompts,
+`counts / sum(prompts)`) and `activity_units="ground_truth"`. A non-positive
+`prompt_scale` (e.g. zero-sum prompts) raises `ValueError`.
+
 ## Determinism summary
 
 - Forward/backward projection: deterministic run-to-run at fixed thread count.

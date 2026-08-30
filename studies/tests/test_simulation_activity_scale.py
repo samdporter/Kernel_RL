@@ -14,7 +14,12 @@ pytestmark = [
 ]
 
 def test_simulate_inputs_activity_scale_contract():
-    """High-count limit: sum(recon) * scale should be invariant to counts."""
+    """High-count limit: sum(recon) should be invariant to counts (GT units).
+
+    The reconstruction is rescaled back to ground-truth units by dividing by
+    the prompt scaling factor, so the sum of the returned image should be
+    approximately invariant to the noise level chosen for the prompts.
+    """
     from krl_studies.simulation import simulate_inputs
 
     # Uniform GT on 1 mm grid
@@ -29,22 +34,26 @@ def test_simulate_inputs_activity_scale_contract():
         "n_subits": 4,
     }
 
-    scales = []
     recon_sums = []
     metas = []
     for counts in (1e6, 1e7, 1e8):
         cfg = dict(cfg_base)
         cfg["counts"] = counts
         recon, meta = simulate_inputs(gt, cfg)
-        scales.append(meta.get("scale", 1.0))
         recon_sums.append(float(recon.sum()))
         metas.append(meta)
 
-    # scale * sum(recon) should be roughly constant (invariant to Poisson noise)
-    scaled_sums = [s * r for s, r in zip(scales, recon_sums)]
-    rel_std = np.std(scaled_sums) / np.mean(scaled_sums)
-    assert rel_std < 0.1, f"Activity scale contract violated: scaled sums {scaled_sums}, rel_std {rel_std:.3f}"
+    # sum(recon) should be roughly constant across counts (recon is in GT units)
+    rel_std = np.std(recon_sums) / np.mean(recon_sums)
+    assert rel_std < 0.1, (
+        f"Activity scale contract violated: recon sums {recon_sums}, "
+        f"rel_std {rel_std:.3f}"
+    )
 
-    # Also check that scale is recorded
+    # Metadata contract: reconstructions are in GT units and prompt_scale is recorded
     for meta in metas:
-        assert "scale" in meta, "meta must contain 'scale' = counts / sum(prompts)"
+        assert meta["activity_units"] == "ground_truth", (
+            f"meta must declare activity_units='ground_truth', got {meta.get('activity_units')!r}"
+        )
+        assert "prompt_scale" in meta, "meta must contain 'prompt_scale'"
+        assert meta["prompt_scale"] > 0

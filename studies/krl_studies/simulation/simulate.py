@@ -156,6 +156,11 @@ def simulate_inputs(gt_array, cfg_dict):
     arr = np.asarray(prompts.as_array(), dtype=np.float64)
     total = float(arr.sum())
     scale = counts / total if total > 0 else 0.0
+    if scale <= 0:
+        raise ValueError(
+            f"prompt scale factor must be positive, got scale={scale} "
+            f"(counts={counts}, sum(prompts)={total})"
+        )
     scaled = prompts.clone()
     scaled.fill((arr * scale).astype(np.float32))
 
@@ -175,6 +180,10 @@ def simulate_inputs(gt_array, cfg_dict):
     recon = resample_from_fov_zyx(recon_scanner, scanner_voxel_mm, gt.shape, input_voxel_mm)
     recon = np.maximum(recon, 0.0, out=recon)
 
+    # The OSEM reconstruction sees count-scaled prompts; invert the prompt
+    # scaling so the returned image is in the same units as the input GT.
+    recon = recon / scale
+
     meta = {
         "input_shape": tuple(int(v) for v in gt.shape),
         "input_voxel_mm": tuple(float(v) for v in input_voxel_mm),
@@ -192,6 +201,7 @@ def simulate_inputs(gt_array, cfg_dict):
         "seed": seed_full,
         "n_subits": n_subits,
         "attenuation": attenuation is not None,
-        "scale": scale,
+        "prompt_scale": scale,
+        "activity_units": "ground_truth",
     }
     return recon, meta
