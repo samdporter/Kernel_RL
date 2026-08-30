@@ -37,11 +37,12 @@ _REDUCED_KWARGS = {"span": 1, "max_ring_diff": 1, "num_views": 42, "num_tangenti
 
 
 def _get_acquisition(scanner_name: str):
-    """Return (acq_template, scanner_used) with mMR fallback.
+    """Return (acq_template, scanner_used) for the exact requested scanner.
 
-    Tries the requested scanner with reduced kwargs; on any exception falls
-    back to ``Siemens mMR`` reduced. The returned scanner name is recorded in
-    meta["scanner"].
+    Paper runs must not silently change scanner: if the requested template
+    cannot be built, the original exception propagates. The cache is keyed by
+    the exact scanner name (the reduced geometry is fixed in
+    ``_REDUCED_KWARGS`` so changing it would require its own cache key).
     """
     cache_key = scanner_name
     if cache_key in _ACQ_CACHE:
@@ -50,19 +51,8 @@ def _get_acquisition(scanner_name: str):
             return cached
         raise RuntimeError("corrupt acquisition cache entry")
 
-    def _try(name: str):
-        return _api.acquisition_template(name, **_REDUCED_KWARGS)
-
-    try:
-        acq = _try(scanner_name)
-        used = scanner_name
-    except Exception:
-        fallback = "Siemens mMR"
-        if scanner_name == fallback:
-            raise
-        acq = _try(fallback)
-        used = fallback
-
+    acq = _api.acquisition_template(scanner_name, **_REDUCED_KWARGS)
+    used = scanner_name
     _ACQ_CACHE[cache_key] = (acq, used)
     return acq, used
 

@@ -83,25 +83,29 @@ def _build_observed(run: RunSpec, ds: SphereDataset, gt: np.ndarray) -> tuple[np
     if run.input_kind == "reference":
         return ds.reference_pet, {}
     if run.input_kind == "quick_sim":
+        # Precedence: input_params overrides run.sim overrides the documented default.
         return quick_sim(
             gt,
             fwhm_mm=float(run.input_params["fwhm_mm"]),
             counts=float(run.input_params["counts"]),
             realisation=int(run.input_params.get("realisation", 0)),
             voxel_mm=ds.voxel_mm,
+            seed=int(run.input_params.get("seed", run.sim.get("seed", 0))),
         ), {}
     if run.input_kind == "sirf_sim":
         from krl_studies.simulation.simulate import simulate_inputs  # noqa: I001,WPS433 - lazy so native dry-run doesn't need SIRF
 
+        # Precedence: input_params overrides run.sim overrides the documented default.
+        # Avoid setdefault for scanner/seed/subiterations so an explicit override always wins.
         cfg = dict(run.input_params)
-        if "seed" not in cfg:
-            cfg["seed"] = int(run.sim.get("seed", 0))
+        cfg["scanner"] = run.input_params.get("scanner", run.sim.get("scanner", "Siemens mMR"))
+        cfg["seed"] = run.input_params.get("seed", run.sim.get("seed", 0))
+        cfg["seed"] = int(cfg["seed"])
         if "n_subits" not in cfg and "n_subiterations" not in cfg:
             if "n_subits" in run.sim:
                 cfg["n_subits"] = int(run.sim["n_subits"])
             elif "n_subiterations" in run.sim:
                 cfg["n_subiterations"] = int(run.sim["n_subiterations"])
-        cfg.setdefault("scanner", run.input_params.get("scanner", "Siemens mMR"))
         cfg.setdefault("input_voxel_mm", ds.voxel_mm)
         recon, meta = simulate_inputs(gt, cfg)
         return recon, meta
