@@ -49,7 +49,7 @@ def _sha256_file(path: Path) -> str:
 
 
 def _canonical_json(obj: Any) -> str:
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
 
 
 def compute_input_id(identity: dict) -> str:
@@ -61,8 +61,14 @@ def compute_input_id(identity: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def compute_observed_sha256(arr: np.ndarray) -> str:
-    """Return sha256 of ``arr.tobytes()`` together with the array's dtype."""
+def compute_observed_array_sha256(arr: np.ndarray) -> str:
+    """Return sha256 of the in-memory observed array, dtype and shape prefixed.
+
+    Hashes ``arr.tobytes()`` together with the array's ``dtype`` and ``shape``,
+    not the on-disk NIfTI bytes. The on-disk file checksum lives in
+    ``data.sha256`` inside each cache entry and is what the manifest records
+    as ``observed_sha256``.
+    """
     arr = np.ascontiguousarray(arr)
     h = hashlib.sha256()
     h.update(f"dtype={arr.dtype.str};shape={tuple(arr.shape)};".encode("utf-8"))
@@ -104,9 +110,7 @@ def _source_checksums(run) -> dict[str, str]:
         root = Path(run.dataset.get("root", ""))
         subject = run.dataset.get("subject_id", run.dataset.get("subject"))
         if subject is not None:
-            slug = str(subject)
-            if not slug.startswith("subject_"):
-                slug = f"subject_{slug}"
+            slug = f"subject_{int(subject):02d}"
             candidate = root / slug / "pet_gt.nii.gz"
             if candidate.exists():
                 files.append(candidate)

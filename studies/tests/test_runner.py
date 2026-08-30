@@ -405,8 +405,8 @@ def test_input_cache_reuses_identical_simulation(tmp_path, monkeypatch):
     identity_b = cache_mod.build_input_identity(run_b)
     assert cache_mod.compute_input_id(identity_a) == cache_mod.compute_input_id(identity_b)
 
-    expected_sha = cache_mod.compute_observed_sha256(obs_a)
-    assert cache_mod.compute_observed_sha256(obs_b) == expected_sha
+    expected_sha = cache_mod.compute_observed_array_sha256(obs_a)
+    assert cache_mod.compute_observed_array_sha256(obs_b) == expected_sha
 
     cached = cache_mod.read_entry(out_root, cache_mod.compute_input_id(identity_a), identity_a)
     assert cached is not None
