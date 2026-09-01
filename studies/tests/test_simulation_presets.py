@@ -33,15 +33,49 @@ def test_unknown_condition_raises():
 
 
 def test_condition_specs_separate_forward_and_reconstruction_models():
-    # Conditions differ via the true blur applied in the forward model
-    # (calibrated pre-blur route); recon-side processors are disabled in this
-    # SIRF build (see docs/reference/SIRF_API_NOTES.md).
-    assert condition_spec("psf-none").forward_model_fwhm_xyz == pytest.approx((5.7, 5.7, 7.8))
-    assert condition_spec("psf-undersized").forward_model_fwhm_xyz == pytest.approx((5.1, 5.1, 7.1))
-    assert condition_spec("psf-matched").forward_model_fwhm_xyz == pytest.approx((4.5, 4.5, 6.4))
-    assert all(spec.recon_model_fwhm_xyz is None for spec in CONDITION_SPECS.values())
-    for name, spec in CONDITION_SPECS.items():
-        assert spec.forward_model_fwhm_xyz == spec.target_residual_fwhm_xyz
+    # Plan 3 truth/recon split (Task 4): every condition shares the SAME
+    # truth-side blur applied as a pre-blur in the forward model; conditions
+    # differ ONLY through the reconstruction model's in-model processor. Values
+    # remain provisional until calibration signs them off
+    # (studies/scenarios/resolution_calibration.yaml).
+    assert condition_spec("psf-none").forward_model_fwhm_xyz == pytest.approx((5.0, 5.0, 6.0))
+    assert condition_spec("psf-undersized").forward_model_fwhm_xyz == pytest.approx((5.0, 5.0, 6.0))
+    assert condition_spec("psf-matched").forward_model_fwhm_xyz == pytest.approx((5.0, 5.0, 6.0))
+
+
+def test_psf_presets_share_truth_model():
+    # The forward-model PSF is the truth-side blur; it must be identical across
+    # all conditions so that prompts only differ by condition-independent noise.
+    truth_fwhms = {
+        name: spec.forward_model_fwhm_xyz for name, spec in CONDITION_SPECS.items()
+    }
+    assert truth_fwhms["psf-none"] == truth_fwhms["psf-undersized"]
+    assert truth_fwhms["psf-none"] == truth_fwhms["psf-matched"]
+
+
+def test_psf_presets_recon_model_distinguishes_conditions():
+    # The reconstruction-model PSF is condition-specific; it varies the
+    # post-acquisition blur the recon AM compensates for.
+    assert condition_spec("psf-none").recon_model_fwhm_xyz is None
+    undersized = condition_spec("psf-undersized").recon_model_fwhm_xyz
+    matched = condition_spec("psf-matched").recon_model_fwhm_xyz
+    assert isinstance(undersized, tuple) and len(undersized) == 3
+    assert isinstance(matched, tuple) and len(matched) == 3
+    assert matched != undersized
+
+
+def test_psf_presets_distinct_metadata_keys():
+    # simulate_inputs metadata must record distinct forward/recon PSFs so that
+    # the truth-side value is reusable across conditions and the recon-side
+    # value carries the condition's specific kernel. The metadata model is
+    # implemented directly via the spec; this asserts the contractual keys.
+    spec = condition_spec("psf-matched")
+    meta = {
+        "forward_model_fwhm": spec.forward_model_fwhm_xyz,
+        "recon_model_fwhm": spec.recon_model_fwhm_xyz,
+    }
+    assert meta["forward_model_fwhm"] == pytest.approx((5.0, 5.0, 6.0))
+    assert meta["recon_model_fwhm"] is not None
 
 
 def test_condition_spec_unknown_name_raises():

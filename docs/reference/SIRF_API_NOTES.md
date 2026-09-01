@@ -147,23 +147,35 @@ as `mu_map.nii.gz`; campaigns pass it via `attenuation_path`. Emission GT
 and the mu-map share the identical centred FOV embedding, preserving
 co-registration through simulation.
 
-Resolution processor (corrected understanding): the adjoint of the composed
-model L = S G P is numerically consistent (<P-model inner-product error 5e-8),
-and pairing data/model FWHM correctly still yields LOWER early-iteration
-central recovery than unmodelled reconstruction of identically pre-blurred
-data (2.34 vs 2.97 at 1e9 counts, 12 subits). At essentially noiseless counts
-unmodelled MLEM deconvolves aggressively and accurately; the clinical benefit
-of PSF modelling (noise suppression) does not manifest in this regime. The
-psf conditions therefore remain realised by per-condition pre-blurring to the
-Vision target residuals (measured agreement ~5% transverse); recon-side
-processors stay available through the gateway but unused for conditions.
-Revisit both behaviours when the image digest changes or full-grid cluster
-runs land.
+### Plan 3 truth/recon split (Task 4)
 
-DECIDED route for Task 3: **pre-blur the ground truth with
-`SeparableGaussianImageFilter` at the condition's residual FWHM before forward
-projection** (+ optional matched post-filter during reconstruction later). This
-keeps the AM clean so reconstruction matches data without an embedded processor.
+The recon-PSF conditions follow the linear model
+
+    L = S G P
+
+with the truth-side blur `P_true` (a Gaussian pre-blur applied to the
+ground truth before forward projection) FIXED across all conditions and the
+reconstruction-side blur `P_recon` (the in-model Gaussian attached to the
+recon AM via `make_acquisition_model(..., resolution_fwhm=...)`) varying by
+condition:
+
+| condition      | forward_model_fwhm (P_true) | recon_model_fwhm (P_recon) |
+|----------------|-----------------------------|----------------------------|
+| psf-none       | (5.0, 5.0, 6.0) mm         | None (no in-model blur)    |
+| psf-undersized | (5.0, 5.0, 6.0) mm         | (2.5, 2.5, 3.0) mm         |
+| psf-matched    | (5.0, 5.0, 6.0) mm         | (5.0, 5.0, 6.0) mm         |
+
+Because P_true is shared, the noisy prompts at fixed counts and seed are
+bit-identical across conditions; only the reconstruction AM changes and so
+the returned inputs differ. The adjoint of the composed model
+L = S G P is numerically consistent (<P-model inner-product error ~5e-8).
+
+These widths are PROVISIONAL. They are not interchangeable across the three
+roles (true-system blur, reconstruction-kernel blur, residual-image FWHM);
+each is recorded under a distinct metadata key (`forward_model_fwhm`,
+`recon_model_fwhm`, `target_residual_fwhm`). The paper/pilot configuration
+must use values signed off by the Task 4.4 calibration re-run
+(studies/scenarios/resolution_calibration.yaml).
 
 Tuple-order trap: presets are (x, y, z); `set_fwhms` consumes (z, y, x).
 `_api.gaussian_smooth_image(image, fwhm_mm)` accepts scalar or `(fx, fy, fz)`
@@ -182,8 +194,8 @@ Transverse widths verify within ~5%. Axial widths undershoot because STIR's
 separable kernel quantises to the coarse probe grid (mapping probe: requesting
 10 mm on-axis yields 7.41 mm at 2 mm voxels; raising `set_max_kernel_sizes`
 does not change it). Expect tighter agreement on finer grids (Vision 1.6 mm /
-planned resampling). Clinical Hoffman-profile re-verification belongs to Task 3
-on realistic grids.
+planned resampling). Clinical Hoffman-profile re-verification belongs to Task
+4.4 on realistic grids (Task 4 then signs off the provisional values).
 
 ### Plan 3 findings (scanner-grid round trip, 2026-08-24)
 

@@ -62,9 +62,14 @@ determinism notes) before touching anything under `simulation/`.
 ### `sirf_sim` inputs
 
 Input kind `sirf_sim` replaces image-space inputs with acquisitions simulated
-by SIRF: ground truth blurred to the condition's residual FWHM, forward
+by SIRF: ground truth blurred with the shared truth-side PSF, forward
 projected, count-scaled, Poisson-sampled (seeded), then reconstructed by
-OSMAPOSL (+RDP when β is set). Example fragment (full grid:
+OSMAPOSL (+RDP when β is set). The reconstruction acquisition model is
+condition-specific: `psf-none` uses no in-model blur, `psf-undersized` uses
+an intentionally undersized Gaussian, and `psf-matched` uses a Gaussian
+matching the truth-side PSF. Because the truth-side blur is shared, the
+noisy prompts are bit-identical across conditions at the same seed/counts;
+only the recon output varies. Example fragment (full grid:
 `scenarios/spheres_sirf.yaml`):
 
 ```yaml
@@ -79,6 +84,10 @@ inputs:
 
 Runs expand over condition × β × counts × realisation; the seed comes from
 the scenario `sim:` block, so identical configs reproduce bit-identical recons.
+The PSF widths (truth-side, recon-side, target residual) are recorded under
+distinct metadata keys (`forward_model_fwhm`, `recon_model_fwhm`,
+`target_residual_fwhm`); all are provisional until the resolution calibration
+signs them off (see `docs/reference/SIRF_API_NOTES.md`).
 
 ### Attenuation / uMap
 
@@ -184,9 +193,12 @@ determinism notes) before touching anything under `simulation/`.
 ### `sirf_sim` inputs
 
 Input kind `sirf_sim` replaces image-space inputs with acquisitions simulated
-by SIRF: ground truth blurred to the condition's residual FWHM, forward
+by SIRF: ground truth blurred with the shared truth-side PSF, forward
 projected, count-scaled, Poisson-sampled (seeded), then reconstructed by
-OSMAPOSL (+RDP when β is set). Example fragment (full grid:
+OSMAPOSL (+RDP when β is set). The reconstruction acquisition model is
+condition-specific (`psf-none` / `psf-undersized` / `psf-matched`); only the
+recon AM varies, so the noisy prompts are bit-identical across conditions at
+the same seed/counts. Example fragment (full grid:
 `scenarios/spheres_sirf.yaml`):
 
 ```yaml
@@ -202,6 +214,9 @@ inputs:
 
 Runs expand over condition × β × counts × realisation; the seed comes from
 the scenario `sim:` block, so identical configs reproduce bit-identical recons.
+The PSF widths (truth-side, recon-side, target residual) are recorded under
+distinct metadata keys; all are provisional until the resolution calibration
+signs them off (see `docs/reference/SIRF_API_NOTES.md`).
 
 ## BrainWeb phantoms
 

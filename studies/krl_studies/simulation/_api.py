@@ -119,10 +119,12 @@ def make_acquisition_model(acq_template, image, resolution_fwhm=None, attenuatio
 
     resolution_fwhm is an (fx, fy, fz) mm tuple applied as image-data
     processor P in the linear model L = S G P (adjoint consistency verified
-    to ~1e-8 relative in the pinned digest build). Note that attaching a
-    Gaussian P reduces early-iteration central recovery versus an unmodelled
-    reconstruction of identically blurred data, so psf conditions are NOT
-    realised through P (see simulate_inputs and docs/reference/SIRF_API_NOTES.md).
+    to ~1e-8 relative in the pinned digest build). Plan 3 truth/recon split
+    (Task 4): the truth-side blur is applied as a Gaussian pre-blur before
+    forward projection; the reconstruction-side blur is attached here, passed
+    as ``resolution_fwhm=`` for the condition's recon_model_fwhm_xyz. None
+    disables the in-model Gaussian (psf-none). See simulate_inputs and
+    docs/reference/SIRF_API_NOTES.md.
 
     attenuation accepts a ready-built AcquisitionSensitivityModel from
     make_acquisition_sensitivity and is attached after the model is set up.

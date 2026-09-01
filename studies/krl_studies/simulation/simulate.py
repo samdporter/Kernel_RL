@@ -6,10 +6,15 @@ reconstruction is resampled back to the original grid, so the returned array
 stays aligned with the caller's GT/guidance while the simulation runs on real
 scanner geometry.
 
-Resolution modelling follows the Plan 3 split: the true system blur
-(forward_model_fwhm) always enters the forward model; only the reconstruction
-model varies by condition (none / undersized / matched). Measured residuals are
-calibrated separately and recorded, not assumed to equal the Vision targets.
+Resolution modelling follows the Plan 3 truth/recon split (Task 4):
+    L = S G P
+where P_true (the truth-side blur) is fixed across all conditions and
+P_recon (the in-model reconstruction-side blur) varies per condition. The
+truth-side blur is applied as a Gaussian pre-blur before forward projection;
+the recon-side blur is attached to the reconstruction acquisition model via
+``make_acquisition_model(..., resolution_fwhm=...)``. Because P_true is
+shared, the noisy prompts depend only on counts/seed -- the acquisition is
+identical across conditions and only the reconstruction changes.
 
 The only SIRF/STIR imports are through ``_api``.
 """
@@ -133,10 +138,12 @@ def simulate_inputs(gt_array, cfg_dict):
     gt_scanner, _ = resample_to_fov_zyx(gt, input_voxel_mm, scanner_shape, scanner_voxel_mm)
     gt_image = _api.make_image(acq, gt_scanner)
 
-    # Calibrated route: the condition's target residual IS the true blur,
-    # applied as a pre-blur before a clean acquisition model. Recon-side
-    # processors are adjoint-consistent, but the reduced, near-noiseless
-    # calibration regime recovers less well with an embedded processor
+    # Plan 3 truth/recon split (Task 4): the condition's forward_model_fwhm_xyz
+    # is the truth-side pre-blur applied BEFORE forward projection -- it is
+    # shared across all conditions so prompts depend only on counts/seed. The
+    # condition's recon_model_fwhm_xyz (None for psf-none) is attached to the
+    # reconstruction acquisition model via make_acquisition_model. Targets
+    # remain provisional until calibration signs them off
     # (docs/reference/SIRF_API_NOTES.md).
     gt_blurred = _api.gaussian_smooth_image(gt_image, spec.forward_model_fwhm_xyz)
     forward_am = _api.make_acquisition_model(acq, gt_image, attenuation=attenuation)
@@ -162,7 +169,9 @@ def simulate_inputs(gt_array, cfg_dict):
 
     init = gt_image.clone()
     init.fill(1.0)
-    recon_am = _api.make_acquisition_model(acq, init, attenuation=attenuation)
+    recon_am = _api.make_acquisition_model(
+        acq, init, attenuation=attenuation, resolution_fwhm=spec.recon_model_fwhm_xyz
+    )
 
     recon_image = _api.reconstruct_osem(noisy, recon_am, init, n_subiterations=n_subits, prior=prior)
 
