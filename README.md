@@ -10,7 +10,7 @@ implementing anatomically-guided Richardson-Lucy deconvolution for PET imaging:
 - **HKRL** — hybrid KRL mixing emission and anatomical features, with optional kernel freezing
 - **MAP-RL** — maximum-a-posteriori RL with Armijo line search and preconditioning
 - **DTV** — directional total variation regularisation built on CIL's gradient operators
-- **Backends** — numba CPU backend; optional PyTorch backend for CUDA GPUs
+- **Backends** — numba CPU backend; optional PyTorch backend for CUDA GPUs and Apple MPS
 
 Everything is built directly on CIL's optimisation framework: operators subclass
 `cil.optimisation.operators.LinearOperator`, algorithms subclass
@@ -69,6 +69,10 @@ docker run --rm --platform linux/amd64 -v "$PWD:/repo:ro" --workdir /tmp \
 > CIL's native acceleration libraries can abort due to duplicate OpenMP runtimes.
 > On macOS keep to the numba backend — `backend="auto"` resolves to numba there
 > *without importing torch* — or run torch-based work in a separate process.
+
+A native Apple Silicon route also works: CIL built from source plus the torch
+backend on MPS (with a documented OpenMP workaround). See
+[macOS / ARM](docs/MACOS-ARM.md) for the verified setup and test commands.
 
 ## Quickstart
 
@@ -142,7 +146,7 @@ and drive it with any CIL algorithm.
 | Backend | Used by | Hardware | Notes |
 |---------|---------|----------|-------|
 | `numba` | kernel + blur | CPU | used by the quickstart above; kernel arithmetic in float64 |
-| `torch` | kernel + blur | CUDA GPU | optional (`gpu` extra); device falls back cuda → mps → cpu |
+| `torch` | kernel + blur | CUDA GPU / Apple MPS | optional (`gpu` extra); device falls back cuda → mps → cpu. The kernel operator's MPS path is verified end-to-end against the numba reference; the blur backend's MPS branch is not verified end-to-end |
 | `scipy` | blur only | CPU | last-resort fallback for the blur operator |
 
 - `backend="auto"` is the default for both `get_kernel_operator` and
@@ -216,8 +220,9 @@ make lint      # ruff check
 make build     # sdist + wheel
 ```
 
-GPU tests need CUDA and are opt-in: `make gpu-test`
-(sets `KRL_RUN_GPU_TESTS=1`).
+GPU tests are opt-in via `KRL_RUN_GPU_TESTS=1`: `make gpu-test` runs the CUDA
+modules, while the MPS module is run explicitly (see
+[macOS / ARM](docs/MACOS-ARM.md)).
 
 The research pipelines, benchmark scripts and BrainWeb data preparation used in
 the original study live under [`examples/`](examples/README.md): they are

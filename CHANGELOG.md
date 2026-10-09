@@ -33,7 +33,9 @@ Fixes and cleanup from the post-release hardening pass; no new features.
 
 ### Changed
 - The torch kernel operator's `device="auto"` now resolves cuda → mps → cpu,
-  consistent with the blurring backend (MPS execution not validated end-to-end).
+  consistent with the blurring backend. The kernel operator's MPS path is now
+  verified end-to-end on macOS/ARM against the numba CPU reference, using CIL
+  built from source (see `docs/MACOS-ARM.md`).
 - Documentation consolidated to match the finished plugin: README installation
   is conda-CIL plus a source or locally built wheel (no PyPI install command or
   PyPI badge, tested Python/CIL combinations listed, macOS route via a Linux
