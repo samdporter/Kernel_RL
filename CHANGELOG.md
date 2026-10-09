@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-09
+
+Metadata-only update; no code changes.
+
+### Changed
+- Added Daniel Deidda (ORCID 0000-0002-2766-4339) as third author and
+  Kris Thielemans (ORCID 0000-0001-6353-9538) as last author in
+  `pyproject.toml`, `CITATION.cff`, `src/krl/__init__.py` and the README
+  citation.
+
 ## [0.3.1] - 2026-10-09
 
 Metadata-only correction; no code changes.
