@@ -22,6 +22,7 @@ import numpy as np
 import torch
 
 from krl.operators.blurring import GaussianBlurringOperator
+from krl.operators.gpu_kernel_operator import TorchKernelOperator
 from krl.operators.kernel_operator import get_kernel_operator
 
 CUDA_AVAILABLE = torch.cuda.is_available()
@@ -107,6 +108,30 @@ def test_resolve_device_falls_back_to_cpu(monkeypatch):
     monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
 
     assert GaussianBlurringOperator._resolve_device() == 'cpu'
+
+
+def test_torch_kernel_resolve_device_prefers_cuda(monkeypatch):
+    """CUDA wins over MPS for the torch kernel operator too."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert TorchKernelOperator._resolve_device() == 'cuda'
+
+
+def test_torch_kernel_resolve_device_uses_mps_without_cuda(monkeypatch):
+    """MPS is selected for the torch kernel operator when CUDA is unavailable."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert TorchKernelOperator._resolve_device() == 'mps'
+
+
+def test_torch_kernel_resolve_device_falls_back_to_cpu(monkeypatch):
+    """CPU is selected when neither CUDA nor MPS is available."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert TorchKernelOperator._resolve_device() == 'cpu'
 
 
 def test_kernel_operator_auto_backend_without_cuda():

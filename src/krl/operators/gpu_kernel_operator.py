@@ -73,7 +73,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
         # Set device
         if device == 'auto':
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.device = torch.device(self._resolve_device())
         else:
             self.device = torch.device(device)
 
@@ -111,8 +111,19 @@ class TorchKernelOperator(BaseKernelOperator):
             gpu_name = torch.cuda.get_device_name(self.device)
             gpu_mem_gb = torch.cuda.get_device_properties(self.device).total_memory / (1024**3)
             print(f"TorchKernelOperator: Using {gpu_name} ({gpu_mem_gb:.1f} GB)")
+        elif self.device.type == 'mps':
+            print("TorchKernelOperator: Using Apple MPS")
         else:
             print("TorchKernelOperator: Using CPU (GPU not available)")
+
+    @staticmethod
+    def _resolve_device():
+        if torch.cuda.is_available():
+            return 'cuda'
+        mps = getattr(torch.backends, 'mps', None)
+        if mps is not None and torch.backends.mps.is_available():
+            return 'mps'
+        return 'cpu'
 
     @staticmethod
     def _pad_reflect_inclusive(tensor, pad):

@@ -142,7 +142,7 @@ and drive it with any CIL algorithm.
 | Backend | Used by | Hardware | Notes |
 |---------|---------|----------|-------|
 | `numba` | kernel + blur | CPU | used by the quickstart above; kernel arithmetic in float64 |
-| `torch` | kernel + blur | CUDA GPU | optional (`gpu` extra); blur device falls back cuda → mps → cpu |
+| `torch` | kernel + blur | CUDA GPU | optional (`gpu` extra); device falls back cuda → mps → cpu |
 | `scipy` | blur only | CPU | last-resort fallback for the blur operator |
 
 - `backend="auto"` is the default for both `get_kernel_operator` and
@@ -151,9 +151,10 @@ and drive it with any CIL algorithm.
     caveat above);
   - elsewhere it probes for torch and uses it only when CUDA is available,
     otherwise it falls back to numba (blur: torch → numba → scipy).
-- The torch kernel operator's `device="auto"` selects CUDA when available and
-  otherwise runs on CPU through the numba implementation, so installing torch
-  never makes the package CUDA-only.
+- The torch kernel operator's `device="auto"` resolves cuda → mps → cpu
+  (same order as the blur backend); when the device resolves to CPU it runs
+  through the numba implementation, so installing torch never makes the
+  package CUDA-only.
 
 ## Notes
 

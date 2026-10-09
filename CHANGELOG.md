@@ -32,6 +32,8 @@ Fixes and cleanup from the post-release hardening pass; no new features.
   that are not three positive finite values raise `ValueError` at construction.
 
 ### Changed
+- The torch kernel operator's `device="auto"` now resolves cuda → mps → cpu,
+  consistent with the blurring backend (MPS execution not validated end-to-end).
 - Documentation consolidated to match the finished plugin: README installation
   is conda-CIL plus a source or locally built wheel (no PyPI install command or
   PyPI badge, tested Python/CIL combinations listed, macOS route via a Linux
