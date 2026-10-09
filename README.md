@@ -251,5 +251,4 @@ See also the [CIL citation guidelines](https://github.com/TomographicImaging/CIL
 
 ## License
 
-cil-krl is declared as MIT-licensed in `pyproject.toml`. This repository does not
-currently ship a `LICENSE` file.
+cil-krl is MIT-licensed — see [LICENSE](LICENSE).

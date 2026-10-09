@@ -50,6 +50,9 @@ Fixes and cleanup from the post-release hardening pass; no new features.
   SciPy wrapper rather than a CIL `Algorithm`.
 
 ### Added
+- An MIT `LICENSE` file (copyright 2026 Sam Porter), now referenced by
+  `pyproject.toml` (`license = {file = "LICENSE"}`) so it ships in the
+  distribution, and linked from the README.
 - Tests for backend selection, blurring, callbacks, L-BFGS-B, NIfTI I/O and the
   public import surface, plus a quickstart test running the README snippet
   against real CIL.
