@@ -22,6 +22,11 @@ from krl_studies.datasets.lesions import (
 )
 from krl_studies.datasets.spheres import SphereDataset, quick_sim
 from krl_studies.datasets.transforms import apply_guidance_condition
+from krl_studies.identity import (
+    GUIDED_METHODS,
+    resolve_guidance,
+    resolve_guidance_lesion_state,
+)
 from krl_studies.methods import METHOD_REGISTRY
 from krl_studies.metrics import (
     background_variability,
@@ -34,7 +39,7 @@ from krl_studies.metrics import (
 
 FWHM_TO_SIGMA = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
 
-_GUIDED_METHODS = frozenset({"krl", "hkrl", "dtv"})
+_GUIDED_METHODS = GUIDED_METHODS
 _CIL_METHODS = frozenset({"rl", "krl", "hkrl", "dtv"})
 
 
@@ -157,21 +162,63 @@ def _iy_region_defaults(gt: np.ndarray) -> tuple[list[np.ndarray], np.ndarray]:
     return [hot, brain & ~hot], brain
 
 
-def _apply_guidance_condition(
-    guidance_arr: np.ndarray,
-    condition: str,
-    voxel_mm: tuple[float, float, float],
+def _resolve_run_guidance(run: RunSpec) -> tuple[str, str]:
+    """Resolve (modality, condition), honouring explicit input params first."""
+    params = {
+        key: run.input_params[key]
+        for key in ("guidance_modality", "guidance_condition")
+        if key in run.input_params
+    }
+    if params:
+        return resolve_guidance(params)
+    return resolve_guidance(
+        {
+            "guidance_modality": getattr(run, "guidance_modality", "t1"),
+            "guidance_condition": getattr(run, "guidance_condition", "exact"),
+        }
+    )
+
+
+def _resolve_run_lesion_state(run: RunSpec) -> str:
+    """Resolve the T1 lesion state, honouring explicit input params first."""
+    if "guidance_lesion_state" in run.input_params:
+        return resolve_guidance_lesion_state(run.input_params)
+    return resolve_guidance_lesion_state(
+        {"guidance_lesion_state": getattr(run, "guidance_lesion_state", "absent")}
+    )
+
+
+def _select_guidance(
     ds,
+    modality: str,
+    default_arr: np.ndarray,
+    lesion_state: str = "absent",
 ) -> np.ndarray:
-    """Apply guidance condition to the guidance array."""
-    if condition == "exact":
-        return guidance_arr
-    if condition == "t2":
-        if not hasattr(ds, "t2") or ds.t2 is None:
-            raise FileNotFoundError(f"T2 not available for subject {getattr(ds, 'subject_id', 'unknown')}")
-        return ds.t2
-    # shift conditions
-    return apply_guidance_condition(guidance_arr, condition, voxel_mm, order=1)
+    """Return the selected guidance modality without mutating the dataset."""
+    select = getattr(ds, "guidance_for", None)
+    if callable(select):
+        return select(modality, lesion_state)
+    if modality == "t1":
+        return default_arr
+    if modality == "t2":
+        arr = getattr(ds, "t2", None)
+        if arr is None:
+            raise FileNotFoundError(f"T2 guidance unavailable for {type(ds).__name__}")
+        return arr
+    raise ValueError(f"guidance modality {modality!r} unavailable for {type(ds).__name__}")
+
+
+def _prepare_guidance(
+    run: RunSpec,
+    ds,
+    voxel_mm: tuple[float, float, float],
+    default_arr: np.ndarray,
+) -> np.ndarray:
+    """Select the resolved guidance modality, then apply the condition to it only."""
+    modality, condition = _resolve_run_guidance(run)
+    lesion_state = _resolve_run_lesion_state(run)
+    selected = _select_guidance(ds, modality, default_arr, lesion_state)
+    return apply_guidance_condition(selected, condition, voxel_mm, order=1)
 
 
 def execute_run(run: RunSpec, force: bool = False) -> Path:
@@ -193,7 +240,8 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
     patient_ds = None
     simulation_meta: dict[str, Any] = {}
 
-    guidance_condition = run.input_params.get("guidance_condition", "exact")
+    guidance_modality, guidance_condition = _resolve_run_guidance(run)
+    guidance_lesion_state = _resolve_run_lesion_state(run)
 
     if run.study == "spheres":
         from krl_studies.datasets.spheres import SphereDataset
@@ -219,7 +267,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
             lesion_labels = [round(2 * s["radius_mm"]) for s in specs]
 
         observed_arr, simulation_meta = _build_observed(run, ds, gt)
-        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, ds)
+        guidance_arr = _prepare_guidance(run, ds, voxel_mm, guidance_arr)
 
         lesion_rois = derive_lesion_rois(gt) if lesion_masks else []
         exclusion = (
@@ -247,19 +295,15 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         voxel_mm = ds.voxel_mm
 
         # Persisted tumour masks for CRC
-        lesion_masks_arr = ds.lesion_masks
-        lesion_masks = lesion_masks_arr if isinstance(lesion_masks_arr, list) else []
-        if len(lesion_masks) == 0 and lesion_masks_arr is not None and lesion_masks_arr.size > 0:
-            lesion_masks = [lesion_masks_arr]
+        lesion_masks = list(ds.lesion_masks)
         lesion_labels = [int(d) for d in ds.lesion_diameters_mm] if ds.lesion_diameters_mm else []
 
         observed_arr, simulation_meta = _build_observed(run, ds, gt)
-        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, ds)
+        guidance_arr = _prepare_guidance(run, ds, voxel_mm, guidance_arr)
 
-        lesion_rois = ds.lesion_masks if ds.lesion_masks.size > 0 else derive_lesion_rois(gt)
         exclusion = (
             np.logical_or.reduce(lesion_masks)
-            if len(lesion_masks) > 0
+            if lesion_masks
             else np.zeros_like(gt, dtype=bool)
         )
         vois = background_vois(gt.shape, exclude_mask=exclusion)
@@ -287,7 +331,7 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         observed_arr = patient_ds.pet
         guidance_arr = patient_ds.guidance
         voxel_mm = patient_ds.voxel_mm
-        guidance_arr = _apply_guidance_condition(guidance_arr, guidance_condition, voxel_mm, patient_ds)
+        guidance_arr = _prepare_guidance(run, patient_ds, voxel_mm, guidance_arr)
 
         if patient_ds.rois is not None:
             try:
@@ -406,7 +450,9 @@ def execute_run(run: RunSpec, force: bool = False) -> Path:
         "simulation": simulation_meta,
         "input_id": _input_id_for_run(run),
         "observed_sha256": _observed_sha256_for_run(run),
+        "guidance_modality": guidance_modality,
         "guidance_condition": guidance_condition,
+        "guidance_lesion_state": guidance_lesion_state,
         "status": "complete",
         "finished_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
         "git_rev": _git_rev(),

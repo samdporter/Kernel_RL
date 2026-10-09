@@ -8,13 +8,15 @@ from dataclasses import replace
 from pathlib import Path
 
 from krl_studies.config import load_scenario
-from krl_studies.runner.execute import execute_run
 from krl_studies.runner.expand import expand_scenario
-from krl_studies.runner.plan import read_run_plan
+from krl_studies.runner.plan import count_run_plan, read_run_plan_index
 
 
 def _execute_one(run, force: bool, out_root: Path | None = None) -> int:
     """Execute a single run, returning 0 on success, 1 on failure."""
+    # Imported lazily so --dry-run expansion does not pull in CIL/SIRF.
+    from krl_studies.runner.execute import execute_run
+
     if out_root is not None:
         run = replace(run, out_root=Path(out_root))
     try:
@@ -53,10 +55,10 @@ def main(argv=None) -> int:
         # Plan mode
         if args.index is None:
             parser.error("--plan requires --index")
-        runs = read_run_plan(args.plan)
-        if not 1 <= args.index <= len(runs):
-            parser.error(f"--plan requires --index between 1 and {len(runs)}")
-        run = runs[args.index - 1]
+        n_runs = count_run_plan(args.plan)
+        if not 1 <= args.index <= n_runs:
+            parser.error(f"--plan requires --index between 1 and {n_runs}")
+        run = read_run_plan_index(args.plan, args.index)
         if args.out is not None:
             run = replace(run, out_root=Path(args.out))
         return _execute_one(run, force=args.force)

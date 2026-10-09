@@ -6,6 +6,7 @@ import pytest
 from krl_studies.config import RunSpec
 from krl_studies.runner.plan import (
     PLAN_VERSION,
+    SCHEMA_VERSION,
     read_run_plan,
     write_run_plan,
 )
@@ -32,7 +33,7 @@ def test_write_run_plan_writes_jsonl(tmp_path):
     lines = path.read_text().strip().splitlines()
     assert len(lines) == 3  # header + 2 runs
     header = json.loads(lines[0])
-    assert header == {"plan_version": PLAN_VERSION}
+    assert header == {"plan_version": PLAN_VERSION, "schema_version": SCHEMA_VERSION}
 
     run1 = json.loads(lines[1])
     assert run1["run_id"] == "run1"

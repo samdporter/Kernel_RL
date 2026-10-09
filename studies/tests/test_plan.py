@@ -52,7 +52,7 @@ def test_plan_cli_creates_jsonl(tmp_path):
     lines = plan_path.read_text().strip().splitlines()
     assert len(lines) >= 2  # header + at least 1 run
     header = json.loads(lines[0])
-    assert header == {"plan_version": 1}
+    assert header == {"plan_version": 2, "schema_version": "run_plan_v2"}
 
 
 def test_plan_cli_roundtrip(tmp_path):

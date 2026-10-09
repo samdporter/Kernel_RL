@@ -111,6 +111,100 @@ BrainWeb preparation exports `mu_map.nii.gz` (1/cm, on the PET grid) for this
 purpose. The attenuation model is materialised into bin efficiencies and
 attached to the acquisition model after setup.
 
+### Campaign identity and subject inventory
+
+Scenarios may freeze an ordered subject list and the physical forward model so
+that runs are content-addressed by three canonical identities (see
+`krl_studies/identity.py`):
+
+- `forward_id`: PET/uMap checksums, truth PSF, scanner/projection/image
+  geometry, physical transforms, object perturbations and the simulation
+  environment. Independent of guidance, method, assumed PSF, counts and noise.
+- `input_id`: `forward_id` + counts + deterministic noise seed + recon-PSF
+  condition/β + OSEM subsets/full-iterations/initialisation + output-grid
+  contract. Independent of guidance, method and assumed PSF.
+- `run_id`: `input_id` + effective method parameters + guidance
+  modality/condition/preprocessing + stopping + protocol/stage/selection policy.
+  Independent of output location and timestamps.
+
+```yaml
+subjects: [1, 2, 3, 4]              # frozen, ordered inventory (defaults to dataset subject)
+forward:
+  truth_fwhm_mm: 5.0                # explicit scalar
+  scanner: Siemens mMR
+  projection_geometry: {num_views: 42, num_tangential: 64}
+  image_geometry: {voxel_mm: [2.0, 2.0, 2.0]}
+  attenuation_path: data/brainweb/subject_01/mu_map.nii.gz
+osem: {subsets: 7, full_iterations: 4}   # scenario default; overridable per input
+output_grid: {shape: [128, 128, 128], voxel_mm: [2.0, 2.0, 2.0]}
+protocol_version: p1
+stage: development
+selection_policy: oracle_min_nrmse
+inputs:
+  - kind: sirf_sim
+    params:
+      counts: [5.0e7]
+      realisation: [0]
+      guidance_modality: [t1, t2, umap]     # t1 | t2 | umap
+      guidance_condition: [exact, shift_p2] # shift acts on the selected modality
+```
+
+Legacy guidance fields are lifted on load; old YAMLs keep working:
+
+| legacy `guidance_condition` | `guidance_modality` | `guidance_condition` |
+| --- | --- | --- |
+| `exact` (or absent) | `t1` | `exact` |
+| `t2` | `t2` | `exact` |
+| `shift_p2` / `shift_m2` / `shift_p5` / `shift_m5` | `t1` | same shift |
+
+An explicit `guidance_modality` overrides the legacy `t1` default; combining
+`guidance_condition: t2` with a non-`t2` modality is an explicit error. The
+shift is applied to the selected guidance array only and never modifies the
+attenuation/uMap.
+
+BrainWeb subjects persist two T1 variants and select one via
+`guidance_lesion_state` (`absent` = raw T1; `present` = raw T1 with the union
+of the planned lesion masks scaled ×4, unchanged elsewhere). The state only
+enters the `run_id` of guided T1 methods (KRL/HKRL/dTV);
+`forward_id`/`input_id` and the acquisition cache are unaffected. **Scope this
+factor to guided T1 runs only**: sharing `guidance_lesion_state: [absent,
+present]` with non-guided methods (rl/input/post-smoothing) leaves their runs
+identical, so `expand_scenario` fails with a duplicate-`run_id` collision.
+Cross the factor per guided method rather than globally.
+
+An explicit `forward:` block requires `truth_fwhm_mm`, `scanner`,
+`projection_geometry` and `image_geometry` (all four keys must be present;
+geometry may be an empty mapping but must not be omitted). Counts must be a
+positive finite number and the truth FWHM must be positive and finite. An
+explicitly `null` count is rejected; an omitted count is allowed for
+reference/native inputs. Legacy scenarios without a `forward:` block resolve
+the truth FWHM with the same precedence as execution: input `fwhm_mm` first,
+then `sim.fwhm_mm`, then 5.0.
+
+`run_id` hashes the effective method parameters: the static per-method defaults
+in `krl_studies.identity.METHOD_DEFAULTS` overridden by the supplied
+parameters. This includes wrapper defaults (RL `epsilon`/`backend`, DTV L-BFGS
+tolerances), the core-plugin `KernelOperator` defaults for KRL/HKRL
+(`num_neighbours`, `sigma_anat`, `sigma_dist`, `sigma_emission`,
+`distance_weighting`, `normalize_features`, `normalize_kernel`, `use_mask`,
+`mask_k`, `recalc_mask`, `hybrid`; hard-coded from
+`src/krl/operators/kernel_operator.py`), and iY's `fwhm_mm` fallback →
+`psf_sigma_vox` derivation. Changing any runtime default therefore changes
+`run_id` even when the scenario does not name it. `METHOD_DEFAULTS` is the
+single source of truth that T5 must make the runtime consume; the kernel copy is
+flagged in-code for alignment.
+
+Plan files use schema `run_plan_v2` (`plan_version: 2`, `schema_version` in the
+header). `write_run_plan` also emits a `<plan>.idx` sidecar recording each
+row's byte offset plus plan size, mtime and first/last row digests, so
+`krl_studies.runner.plan.read_run_plan_index` and `count_run_plan` seek
+directly instead of scanning the plan. A sidecar whose size, mtime or row
+digests no longer match is rebuilt (detecting same-size rewrites), and a
+missing sidecar falls back to a one-off scan.
+
+Scenario/plan expansion (`--dry-run`) is CIL/SIRF-free: the runner CLI imports
+`execute.py` only when a run is actually executed.
+
 ## Plan 3: Cluster Execution & Analysis
 
 ### Campaign execution order

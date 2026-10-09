@@ -91,35 +91,148 @@ def test_force_failure_removes_marker(tmp_path, monkeypatch):
     assert not (out / ".done").exists()
 
 
-def test_runner_brainweb_lesion_truth_fix(tmp_path):
-    """Runner must not raise ValueError on non-empty lesion_masks array."""
-    import numpy as np
+def _write_brainweb_subject(root, subject_id=99, shape=(64, 64, 64)):
+    from conftest import write_test_nifti
 
-    from krl_studies.config import RunSpec
-    from krl_studies.runner.execute import execute_run
-
-    # Build a minimal RunSpec for brainweb with lesion masks present
-    gt = np.ones((16, 16, 16), dtype=np.float32)
-    gt[4:12, 4:12, 4:12] = 4.0
-    lesion_masks = [gt > 2.0]  # non-empty list of boolean arrays
-    lesion_labels = [8]
-
-    # Mock the BrainWebDataset to return our gt and lesion masks
-    # This test runs without SIRF by using input_kind="reference"
-    run = RunSpec(
-        run_id="test_brainweb_lesion",
-        study="brainweb",
-        dataset={"kind": "brainweb", "root": str(tmp_path), "subject_id": 99},
-        input_kind="reference",
-        input_params={"condition": "psf-matched", "guidance_condition": "exact"},
-        method_name="rl",
-        method_params={"fwhm_mm": 4.0, "iterations": 1},
-        sim={"seed": 1337},
-        out_root=str(tmp_path / "results"),
+    from krl_studies.datasets.brainweb import (
+        GUIDANCE_T1_INJECTION_RULE,
+        build_guidance_t1_present,
     )
-    # This should not raise "The truth value of an array with more than one element is ambiguous"
+    from krl_studies.datasets.lesions import mask_union_hash
+
+    subj = root / f"subject_{subject_id:02d}"
+    subj.mkdir(parents=True, exist_ok=True)
+
+    brain = np.zeros(shape, dtype=np.float32)
+    brain[8:56, 8:56, 8:56] = 1.0
+    labels = brain * 3.0
+    pet = brain * 1.0
+    masks = np.zeros((4, *shape), dtype=bool)
+    for i, (z, y, x) in enumerate([(20, 20, 20), (20, 30, 30), (30, 20, 36), (30, 36, 24)]):
+        masks[i, z - 1 : z + 2, y - 1 : y + 2, x - 1 : x + 2] = True
+        pet[masks[i]] = 4.0
+
+    mask_list = [masks[i] for i in range(4)]
+    write_test_nifti(subj / "pet_gt.nii.gz", pet)
+    write_test_nifti(subj / "mr_t1_absent.nii.gz", brain)
+    write_test_nifti(subj / "mr_t1_present.nii.gz", build_guidance_t1_present(brain, mask_list))
+    write_test_nifti(subj / "mr_t2.nii.gz", brain * 0.75)
+    write_test_nifti(subj / "labels.nii.gz", labels)
+    write_test_nifti(subj / "mu_map.nii.gz", labels * 0.1)
+    np.savez_compressed(subj / "lesion_masks.npz", masks=masks)
+    (subj / "lesion_diameters_mm.json").write_text("[8, 12, 16, 24]")
+    (subj / "lesion_layout.json").write_text('{"layout_hash": "fixture"}')
+    (subj / "preparation.json").write_text(
+        json.dumps(
+            {
+                "guidance": {
+                    "injection_multiplier": 4.0,
+                    "injection_rule": GUIDANCE_T1_INJECTION_RULE,
+                    "mask_union_hash": mask_union_hash(mask_list),
+                    "t1_variants": {
+                        "absent": "mr_t1_absent.nii.gz",
+                        "present": "mr_t1_present.nii.gz",
+                    },
+                }
+            }
+        )
+    )
+    return subj
+
+
+def _brainweb_run(tmp_path, **overrides):
+    from krl_studies.config import RunSpec
+
+    params = {
+        "run_id": "test_brainweb_lesion",
+        "study": "brainweb",
+        "dataset": {"kind": "brainweb", "root": str(tmp_path), "subject_id": 99},
+        "input_kind": "quick_sim",
+        "input_params": {"fwhm_mm": 3.0, "counts": 1e5, "realisation": 0},
+        "method_name": "post_smoothing",
+        "method_params": {"sigma_mm": 1.0},
+        "sim": {"seed": 7},
+        "out_root": str(tmp_path / "results"),
+    }
+    params.update(overrides)
+    return RunSpec(**params)
+
+
+def test_runner_brainweb_lesion_truth_fix(tmp_path):
+    """Real smoke test: n persisted lesion masks must run without ambiguity errors."""
+    _write_brainweb_subject(tmp_path)
+    run = _brainweb_run(tmp_path)
     out_dir = execute_run(run, force=True)
     assert out_dir.exists()
+    assert (out_dir / ".done").exists()
+
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert manifest["status"] == "complete"
+    assert manifest["guidance_modality"] == "t1"
+    header = (out_dir / "metrics.csv").read_text().splitlines()[0]
+    assert "crc_mm8" in header
+    assert "crc_mm24" in header
+
+
+def test_brainweb_guidance_modality_selection(tmp_path):
+    from krl_studies.datasets.brainweb import BrainWebDataset
+    from krl_studies.datasets.transforms import apply_guidance_condition
+    from krl_studies.runner.execute import _prepare_guidance
+
+    _write_brainweb_subject(tmp_path)
+    ds = BrainWebDataset(tmp_path, 99)
+    attenuation_before = ds.mu_map.copy()
+
+    # T1 lesion-state selection.
+    absent_run = _brainweb_run(
+        tmp_path,
+        input_params={"fwhm_mm": 3.0, "counts": 1e5, "realisation": 0, "guidance_lesion_state": "absent"},
+    )
+    assert np.array_equal(
+        _prepare_guidance(absent_run, ds, ds.voxel_mm, ds.guidance), ds.mr_t1_absent
+    )
+    present_run = _brainweb_run(
+        tmp_path,
+        input_params={"fwhm_mm": 3.0, "counts": 1e5, "realisation": 0, "guidance_lesion_state": "present"},
+    )
+    assert np.array_equal(
+        _prepare_guidance(present_run, ds, ds.voxel_mm, ds.guidance), ds.mr_t1_present
+    )
+    assert not np.array_equal(ds.mr_t1_absent, ds.mr_t1_present)
+
+    t2_run = _brainweb_run(
+        tmp_path, input_params={"fwhm_mm": 3.0, "counts": 1e5, "realisation": 0, "guidance_condition": "t2"}
+    )
+    assert np.array_equal(_prepare_guidance(t2_run, ds, ds.voxel_mm, ds.guidance), ds.mr_t2)
+
+    umap_run = _brainweb_run(
+        tmp_path,
+        input_params={
+            "fwhm_mm": 3.0,
+            "counts": 1e5,
+            "realisation": 0,
+            "guidance_modality": "umap",
+            "guidance_condition": "shift_p2",
+        },
+    )
+    shifted = _prepare_guidance(umap_run, ds, ds.voxel_mm, ds.guidance)
+    expected = apply_guidance_condition(ds.mu_map, "shift_p2", ds.voxel_mm, order=1)
+    assert np.array_equal(shifted, expected)
+    # The attenuation array must be untouched by guidance conditioning.
+    assert np.array_equal(ds.mu_map, attenuation_before)
+
+    t2_shift_run = _brainweb_run(
+        tmp_path,
+        input_params={
+            "fwhm_mm": 3.0,
+            "counts": 1e5,
+            "realisation": 0,
+            "guidance_modality": "t2",
+            "guidance_condition": "shift_m5",
+        },
+    )
+    t2_shifted = _prepare_guidance(t2_shift_run, ds, ds.voxel_mm, ds.guidance)
+    assert np.array_equal(t2_shifted, apply_guidance_condition(ds.mr_t2, "shift_m5", ds.voxel_mm, order=1))
 
 
 def _make_spheres_run(tmp_path, *, input_kind, input_params, sim, method_name="post_smoothing", method_params=None):

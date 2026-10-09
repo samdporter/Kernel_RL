@@ -24,6 +24,18 @@ import numpy as np
 
 SCHEMA_VERSION = "runner_cache_v1"
 
+# Guidance-side input params that must never affect the acquisition cache: the
+# observed input depends only on physical/acquisition factors. Guidance changes
+# the reconstruction side, so it belongs in run_id, not the input cache key.
+_GUIDANCE_INPUT_KEYS = frozenset(
+    {
+        "guidance_modality",
+        "guidance_condition",
+        "guidance_lesion_state",
+        "guidance_preprocessing",
+    }
+)
+
 
 def _pkg_version(name: str) -> str:
     try:
@@ -127,13 +139,18 @@ def build_input_identity(run) -> dict:
     """Build the canonical input identity dict for ``run``.
 
     Excludes ``method_name`` and ``method_params`` on purpose so all methods
-    sharing the same simulated acquisition share one cache entry.
+    sharing the same simulated acquisition share one cache entry, and excludes
+    guidance-side params so T1 guidance variants (and modality/condition changes)
+    reuse the same observed input.
     """
+    input_params = {
+        key: value for key, value in run.input_params.items() if key not in _GUIDANCE_INPUT_KEYS
+    }
     identity = {
         "study": run.study,
         "dataset": dict(run.dataset),
         "input_kind": run.input_kind,
-        "input_params": dict(run.input_params),
+        "input_params": input_params,
         "sim": dict(run.sim),
         "source_checksums": _source_checksums(run),
         "code_version": _code_version(),

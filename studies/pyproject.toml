@@ -34,6 +34,7 @@ include = ["krl_studies*"]
 krl-studies-run = "krl_studies.runner.cli:main"
 krl-studies-report = "krl_studies.report:main"
 krl-studies-plan = "krl_studies.plan:main"
+krl-studies-prepare = "krl_studies.prepare:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
