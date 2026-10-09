@@ -4,15 +4,17 @@ message: >-
   If you use this software, please cite it using the
   metadata from this file.
 type: software
-version: 0.3.2
+version: 0.3.3
 date-released: 2026-10-09
 authors:
   - family-names: Porter
     given-names: Sam
+    orcid: "https://orcid.org/0000-0002-1815-4716"
     email: sam.porter.18@ucl.ac.uk
     affiliation: University College London
   - family-names: Erlandsson
     given-names: Kjell
+    orcid: "https://orcid.org/0000-0002-1072-4382"
     email: k.erlandsson@ucl.ac.uk
     affiliation: University College London
   - family-names: Deidda

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cil-krl"
-version = "0.3.2"
+version = "0.3.3"
 description = "Kernelised Richardson-Lucy deconvolution for PET with anatomical guidance, built as a CIL plugin"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-09
+
+Metadata-only update; no code changes.
+
+### Changed
+- Added ORCIDs for Sam Porter (0000-0002-1815-4716) and Kjell Erlandsson
+  (0000-0002-1072-4382) to `CITATION.cff`, alongside the existing Daniel
+  Deidda (0000-0002-2766-4339) and Kris Thielemans (0000-0001-6353-9538).
+
 ## [0.3.2] - 2026-10-09
 
 Metadata-only update; no code changes.
