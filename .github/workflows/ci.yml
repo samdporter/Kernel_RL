@@ -110,7 +110,7 @@ jobs:
           print("krl.__version__:", krl.__version__)
           print("cil-krl dist version:", metadata.version("cil-krl"))
           assert "site-packages" in krl.__file__, krl.__file__
-          assert krl.__version__ == metadata.version("cil-krl") == "0.2.0"
+          assert krl.__version__ == metadata.version("cil-krl")
           assert metadata.distribution("cil-krl").entry_points == []
           PY
 

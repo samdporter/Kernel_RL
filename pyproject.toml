@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cil-krl"
-version = "0.2.0"
+version = "0.3.0"
 description = "Kernelised Richardson-Lucy deconvolution for PET with anatomical guidance, built as a CIL plugin"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 authors = [
-    {name = "Kjell Erlandsson", email = "kjell.erlandsson@kcl.ac.uk"},
+    {name = "Kjell Erlandsson", email = "k.erlandsson@ucl.ac.uk"},
+    {name = "Sam Porter", email = "sam.porter.18@ucl.ac.uk"},
 ]
 keywords = [
     "PET",
