@@ -1,16 +1,15 @@
 """CUDA availability tests for operator backend selection.
 
-These tests confirm both fallback behavior (when CUDA is unavailable) and
-GPU preference (when CUDA is available) for the Gaussian blurring and kernel
-operators.
+These tests confirm fallback behaviour when CUDA is unavailable and GPU
+preference when it is available. Importing torch alongside CIL's native
+libraries breaks OpenMP on some platforms, so torch-touching tests are opt-in
+via this environment variable.
 """
 import os
 
 import pytest
 
-# Importing torch alongside CIL's native libraries breaks OpenMP on some
-# platforms, so torch-touching tests are opt-in via this environment variable.
-if not os.environ.get("KRL_RUN_GPU_TESTS"):
+if os.environ.get("KRL_RUN_GPU_TESTS") != "1":
     pytest.skip(
         "GPU tests disabled; set KRL_RUN_GPU_TESTS=1 to run them",
         allow_module_level=True,
@@ -20,14 +19,12 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
+import torch
 
+from krl.operators.blurring import GaussianBlurringOperator
+from krl.operators.kernel_operator import get_kernel_operator
 
-def _cuda_available() -> bool:
-    try:
-        import torch
-    except ImportError:
-        return False
-    return bool(torch.cuda.is_available())
+CUDA_AVAILABLE = torch.cuda.is_available()
 
 
 @dataclass
@@ -39,8 +36,7 @@ class MockGeometry:
     shape: Tuple[int, int, int] = (10, 10, 10)
 
     def allocate(self, value: float = 0.0):
-        data = np.full(self.shape, value, dtype=np.float64)
-        return MockImage(data)
+        return MockImage(np.full(self.shape, value, dtype=np.float64))
 
 
 class MockImage:
@@ -62,130 +58,82 @@ class MockImage:
         self._data[...] = np.asarray(values, dtype=np.float64)
 
 
-def test_blurring_auto_backend_without_cuda():
-    """Test that GaussianBlurringOperator with backend='auto' falls back to CPU when CUDA unavailable."""
-    try:
-        import torch
-        cuda_available = torch.cuda.is_available()
-    except ImportError:
-        pytest.skip("PyTorch not installed, skipping CUDA fallback test")
+def test_blurring_auto_backend_prefers_torch_only_with_cuda():
+    """backend='auto' selects torch on CUDA and falls back to CPU otherwise."""
+    op = GaussianBlurringOperator((1.0, 1.0, 1.0), MockGeometry(), backend='auto')
 
-    from krl.operators.blurring import GaussianBlurringOperator
-
-    geometry = MockGeometry()
-
-    # Create operator with auto backend - should not crash
-    op = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend='auto')
-
-    if cuda_available:
-        # If CUDA is available, torch backend should be selected
-        assert op.backend == 'torch', "Expected torch backend when CUDA available"
+    if CUDA_AVAILABLE:
+        assert op.backend == 'torch'
     else:
-        # If CUDA is not available, should fall back to numba or scipy
-        assert op.backend in ['numba', 'scipy'], (
-            f"Expected numba or scipy backend when CUDA unavailable, got {op.backend}"
-        )
-        print(f"✓ Auto backend correctly fell back to: {op.backend}")
+        assert op.backend in ('numba', 'scipy')
 
 
-def test_blurring_explicit_torch_backend_without_cuda():
-    """Test that explicitly requesting torch backend raises clear error when CUDA unavailable."""
-    try:
-        import torch
-        cuda_available = torch.cuda.is_available()
-    except ImportError:
-        pytest.skip("PyTorch not installed, skipping CUDA fallback test")
+@pytest.mark.skipif(CUDA_AVAILABLE, reason="CUDA available; no-CUDA fallback not exercised")
+def test_blurring_explicit_torch_backend_falls_back_to_non_cuda_device():
+    """Explicitly requesting torch must not require CUDA.
 
-    if cuda_available:
-        pytest.skip("CUDA is available, skipping no-CUDA error test")
+    The torch backend resolves cuda -> mps -> cpu, so construction should
+    succeed and use a non-CUDA device when no GPU is present.
+    """
+    op = GaussianBlurringOperator((1.0, 1.0, 1.0), MockGeometry(), backend='torch')
 
-    from krl.operators.blurring import GaussianBlurringOperator
+    assert op.backend == 'torch'
+    assert op.device in ('cpu', 'mps')
 
-    geometry = MockGeometry()
+    result = op.direct(MockGeometry().allocate(1.0))
+    assert result.shape == MockGeometry().shape
+    assert np.all(np.isfinite(result.as_array()))
 
-    # Explicitly requesting torch backend should raise RuntimeError
-    with pytest.raises(RuntimeError, match="no CUDA GPUs available"):
-        GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend='torch')
 
-    print("✓ Torch backend correctly raises error when CUDA unavailable")
+def test_resolve_device_prefers_cuda(monkeypatch):
+    """CUDA wins over MPS when both are available."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert GaussianBlurringOperator._resolve_device() == 'cuda'
+
+
+def test_resolve_device_uses_mps_without_cuda(monkeypatch):
+    """MPS is selected when CUDA is unavailable."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+
+    assert GaussianBlurringOperator._resolve_device() == 'mps'
+
+
+def test_resolve_device_falls_back_to_cpu(monkeypatch):
+    """CPU is selected when neither CUDA nor MPS is available."""
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    assert GaussianBlurringOperator._resolve_device() == 'cpu'
 
 
 def test_kernel_operator_auto_backend_without_cuda():
-    """Test that kernel operator with backend='auto' falls back to CPU when CUDA unavailable."""
-    try:
-        import torch
-        cuda_available = torch.cuda.is_available()
-    except ImportError:
-        pytest.skip("PyTorch not installed, skipping CUDA fallback test")
+    """backend='auto' selects torch on CUDA and numba otherwise."""
+    op = get_kernel_operator(MockGeometry(), backend='auto')
 
-    from krl.operators.kernel_operator import get_kernel_operator
-
-    geometry = MockGeometry()
-
-    # Create operator with auto backend - should not crash
-    try:
-        op = get_kernel_operator(geometry, backend='auto')
-
-        if cuda_available:
-            # If CUDA is available, torch backend might be selected
-            assert op.backend in ['torch', 'numba'], f"Unexpected backend: {op.backend}"
-        else:
-            # If CUDA is not available, should use numba
-            assert op.backend == 'numba', (
-                f"Expected numba backend when CUDA unavailable, got {op.backend}"
-            )
-            print(f"✓ Kernel operator correctly fell back to: {op.backend}")
-    except RuntimeError as e:
-        if "Numba backend not available" in str(e):
-            pytest.skip("Numba not available, skipping kernel operator test")
-        raise
+    if CUDA_AVAILABLE:
+        assert op.backend in ('torch', 'numba')
+    else:
+        assert op.backend == 'numba'
 
 
-@pytest.mark.skipif(not _cuda_available(), reason="CUDA not available")
+@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
 def test_blurring_auto_backend_with_cuda():
     """Test Gaussian blurring prefers torch backend when CUDA is available."""
-    from krl.operators.blurring import GaussianBlurringOperator
-
-    geometry = MockGeometry()
-    op = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend='auto')
+    op = GaussianBlurringOperator((1.0, 1.0, 1.0), MockGeometry(), backend='auto')
 
     assert op.backend == 'torch', "Auto backend should select torch when CUDA is available"
     assert hasattr(op, "psf_t")
     assert op.psf_t.is_cuda, "Torch PSF tensor should be allocated on CUDA device"
 
 
-@pytest.mark.skipif(not _cuda_available(), reason="CUDA not available")
+@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
 def test_kernel_operator_auto_backend_with_cuda():
     """Test kernel operator uses GPU backend when CUDA is available."""
-    from krl.operators.kernel_operator import get_kernel_operator
-
-    geometry = MockGeometry()
-    op = get_kernel_operator(geometry, backend='auto')
+    op = get_kernel_operator(MockGeometry(), backend='auto')
 
     assert op.backend == 'torch', "Auto backend should choose torch when CUDA is available"
     assert hasattr(op, "device")
     assert op.device.type == 'cuda', "Torch kernel operator should target CUDA device"
-
-
-if __name__ == "__main__":
-    # Run tests when executed directly
-    print("Testing CUDA fallback behavior...")
-    print()
-
-    try:
-        test_blurring_auto_backend_without_cuda()
-    except Exception as e:
-        print(f"✗ test_blurring_auto_backend_without_cuda failed: {e}")
-
-    try:
-        test_blurring_explicit_torch_backend_without_cuda()
-    except Exception as e:
-        print(f"✗ test_blurring_explicit_torch_backend_without_cuda failed: {e}")
-
-    try:
-        test_kernel_operator_auto_backend_without_cuda()
-    except Exception as e:
-        print(f"✗ test_kernel_operator_auto_backend_without_cuda failed: {e}")
-
-    print()
-    print("All tests completed!")

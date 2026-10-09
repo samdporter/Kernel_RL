@@ -6,7 +6,7 @@ import pytest
 
 # Importing torch alongside CIL's native libraries breaks OpenMP on some
 # platforms, so torch-touching tests are opt-in via this environment variable.
-if not os.environ.get("KRL_RUN_GPU_TESTS"):
+if os.environ.get("KRL_RUN_GPU_TESTS") != "1":
     pytest.skip(
         "GPU tests disabled; set KRL_RUN_GPU_TESTS=1 to run them",
         allow_module_level=True,
@@ -17,11 +17,11 @@ from typing import Tuple
 
 import numpy as np
 import torch
+from cil.framework import ImageGeometry
 
 from krl.operators.kernel_operator import get_kernel_operator
 
 CUDA_AVAILABLE = torch.cuda.is_available()
-TORCH_AVAILABLE = True
 
 DEVICE_PARAMS = [
     pytest.param("cpu", id="cpu"),
@@ -31,12 +31,6 @@ DEVICE_PARAMS = [
         marks=pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available"),
     ),
 ]
-
-# Skip all tests if torch not available
-pytestmark = pytest.mark.skipif(
-    not TORCH_AVAILABLE,
-    reason="PyTorch not available - GPU kernel operator tests skipped"
-)
 
 
 @dataclass
@@ -113,15 +107,6 @@ def emission_random(small_geometry):
 
 class TestBasicImports:
     """Test basic imports and availability of GPU operator."""
-
-    def test_torch_import(self):
-        """Test PyTorch is imported."""
-        assert TORCH_AVAILABLE, "PyTorch should be available for GPU tests."
-
-    def test_cuda_availability(self):
-        """Test CUDA availability."""
-        if TORCH_AVAILABLE:
-            assert CUDA_AVAILABLE
 
     def test_gpu_operator_import(self):
         """Test GPU kernel operator can be imported."""
@@ -216,6 +201,7 @@ class TestGPUMaskPrecomputation:
         assert (mask < total).all()
 
 
+@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
 class TestGPUWeightPrecomputation:
     """Test GPU weight precomputation."""
 
@@ -380,7 +366,73 @@ class TestGPUAdjointCorrectness:
         assert op._normalisation_map.dtype == np.float32
 
 
-@pytest.mark.skipif(not TORCH_AVAILABLE, reason="PyTorch not available")
+class TestBoundedDenseWeightSum:
+    """Regression for adjoint-first normalisation in dense mode.
+
+    The adjoint bootstrap must compute the per-voxel weight sum without
+    materialising the full (s0, s1, s2, n³) weight tensor. These run on the
+    torch CPU device; the CUDA path is covered by the CUDA-only tests.
+    """
+
+    def test_bounded_dense_sum_matches_materialised(self, small_geometry, anatomical_gradient):
+        op = get_kernel_operator(
+            small_geometry,
+            backend="torch",
+            device="cpu",
+            dtype="float32",
+            num_neighbours=3,
+            use_mask=False,
+            sigma_anat=0.5,
+            sigma_dist=1.0,
+            distance_weighting=True,
+        )
+        op.set_anatomical_image(anatomical_gradient)
+        anat = op._validate_anatomical_image()
+        anat_tensor = torch.from_numpy(
+            np.ascontiguousarray(anat, dtype=op.numpy_dtype)
+        ).to(op.device)
+
+        bounded = op._torch_precompute_anatomical_weight_sum_dense(
+            anat_tensor,
+            3,
+            op.parameters["sigma_anat"],
+            op.parameters["sigma_dist"],
+            op.parameters["distance_weighting"],
+        )
+        full = op._torch_precompute_anatomical_weights_dense(
+            anat_tensor,
+            3,
+            op.parameters["sigma_anat"],
+            op.parameters["sigma_dist"],
+            op.parameters["distance_weighting"],
+        ).sum(dim=-1)
+
+        assert bounded.shape == small_geometry.shape
+        torch.testing.assert_close(bounded, full, rtol=1e-5, atol=1e-6)
+
+    def test_fixed_dense_weight_sum_avoids_full_weight_tensor(
+        self, small_geometry, anatomical_gradient, monkeypatch
+    ):
+        op = get_kernel_operator(
+            small_geometry,
+            backend="torch",
+            device="cpu",
+            dtype="float32",
+            num_neighbours=3,
+            use_mask=False,
+        )
+        op.set_anatomical_image(anatomical_gradient)
+
+        def fail_if_called(*args, **kwargs):
+            raise AssertionError("dense full weight tensor was materialised")
+
+        monkeypatch.setattr(op, "precompute_anatomical_weights", fail_if_called)
+
+        wsum = op._torch_anatomical_weight_sum_fixed()
+        assert wsum.shape == small_geometry.shape
+        assert torch.isfinite(wsum).all()
+
+
 class TestGPUvsCPUConsistency:
     """Test GPU results match CPU results."""
 
@@ -611,9 +663,6 @@ class TestGPUMemoryManagement:
 
     def test_memory_cleanup(self, medium_geometry, anatomical_gradient):
         """Test GPU memory is released after operation."""
-        if not torch.cuda.is_available():
-            pytest.skip("CUDA not available")
-
         # Record initial memory
         torch.cuda.reset_peak_memory_stats()
         initial_mem = torch.cuda.memory_allocated()
@@ -650,6 +699,180 @@ class TestGPUMemoryManagement:
         assert final_mem < peak_mem * 0.5  # At least 50% should be freed
 
 
+def make_cil_geometry(shape=(6, 6, 6), dtype=np.float64):
+    z, y, x = shape
+    return ImageGeometry(voxel_num_x=x, voxel_num_y=y, voxel_num_z=z, dtype=dtype)
+
+
+def make_cil_image(geometry, array):
+    image = geometry.allocate()
+    image.fill(np.asarray(array, dtype=geometry.dtype))
+    return image
+
+
+class TestTorchCPUFallbackDelegate:
+    """Regressions for the device='cpu' delegate to the numba KernelOperator.
+
+    These run on the torch CPU delegate and do not exercise the CUDA kernels.
+    """
+
+    def test_mixed_dtype_forward_preserves_input_dtype(self):
+        """float64 data with a float32 anatomy must round-trip through the delegate."""
+        geometry = make_cil_geometry(dtype=np.float32)
+        operator = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            num_neighbours=3,
+            sigma_anat=0.4,
+            normalize_kernel=True,
+            normalize_features=False,
+            use_mask=True,
+            mask_k=10,
+        )
+        anatomy = geometry.allocate()
+        anatomy.fill(np.random.default_rng(3).normal(size=geometry.shape).astype(np.float32))
+        operator.set_anatomical_image(anatomy)
+
+        data_geometry = make_cil_geometry(shape=geometry.shape, dtype=np.float64)
+        rng = np.random.default_rng(5)
+        x = make_cil_image(data_geometry, rng.normal(size=geometry.shape))
+        y = make_cil_image(data_geometry, rng.normal(size=geometry.shape))
+
+        forward = operator.direct(x).as_array()
+        assert forward.dtype == np.float64
+
+        dot_forward = float(np.sum(forward * y.as_array()))
+        dot_adjoint = float(np.sum(x.as_array() * operator.adjoint(y).as_array()))
+        assert np.isclose(dot_forward, dot_adjoint, atol=1e-10, rtol=1e-8)
+
+    def test_normalized_hybrid_forward_adjoint_dot_product(self):
+        """Normalized hybrid forward/adjoint must satisfy the dot-product identity."""
+        geometry = make_cil_geometry()
+        operator = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float64',
+            num_neighbours=5,
+            sigma_anat=0.5,
+            sigma_dist=1.0,
+            sigma_emission=0.5,
+            normalize_kernel=True,
+            use_mask=False,
+            hybrid=True,
+        )
+        grid = np.indices(geometry.shape).sum(axis=0) / float(np.prod(geometry.shape))
+        operator.set_anatomical_image(make_cil_image(geometry, grid))
+
+        rng = np.random.default_rng(7)
+        x = make_cil_image(geometry, rng.normal(size=geometry.shape))
+        y = make_cil_image(geometry, rng.normal(size=geometry.shape))
+
+        forward = operator.direct(x).as_array()
+        adjoint = operator.adjoint(y).as_array()
+
+        dot_forward = float(np.sum(forward * y.as_array()))
+        dot_adjoint = float(np.sum(x.as_array() * adjoint))
+        assert np.isclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
+
+    def test_hybrid_frozen_reference_round_trips(self):
+        """The frozen emission reference set via the delegate survives forward/adjoint."""
+        geometry = make_cil_geometry()
+        operator = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float64',
+            num_neighbours=3,
+            sigma_anat=1.0,
+            sigma_emission=1.0,
+            normalize_kernel=True,
+            use_mask=False,
+            hybrid=True,
+        )
+        operator.set_anatomical_image(make_cil_image(geometry, np.indices(geometry.shape).sum(axis=0)))
+
+        rng = np.random.default_rng(11)
+        emission_v1 = make_cil_image(geometry, rng.uniform(50, 150, geometry.shape))
+        emission_v2 = make_cil_image(geometry, rng.uniform(50, 150, geometry.shape))
+
+        operator.freeze_emission_kernel = True
+        operator.direct(emission_v1)
+        frozen = operator.frozen_emission_kernel.copy()
+        np.testing.assert_array_equal(frozen, emission_v1.as_array())
+
+        operator.direct(emission_v2)
+        np.testing.assert_array_equal(operator.frozen_emission_kernel, frozen)
+
+        operator.adjoint(geometry.allocate(1.0))
+        np.testing.assert_array_equal(operator.frozen_emission_kernel, frozen)
+        assert not np.allclose(frozen, emission_v2.as_array(), rtol=1e-10)
+
+    def test_masked_anatomical_weights_on_cpu(self):
+        """Masked weight precomputation on the CPU delegate must work and stay cached."""
+        geometry = make_cil_geometry()
+        operator = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float64',
+            num_neighbours=3,
+            sigma_anat=0.4,
+            use_mask=True,
+            mask_k=10,
+        )
+        operator.set_anatomical_image(make_cil_image(geometry, np.indices(geometry.shape).sum(axis=0)))
+
+        weights = operator.precompute_anatomical_weights()
+
+        s0, s1, s2 = geometry.shape
+        assert weights.shape == (s0, s1, s2, 10)
+        assert weights.dtype == torch.float64
+        assert torch.isfinite(weights).all()
+
+        # The caches must stay consistent for subsequent forward/adjoint calls.
+        emission = make_cil_image(geometry, np.ones(geometry.shape))
+        assert np.all(np.isfinite(operator.direct(emission).as_array()))
+        assert np.all(np.isfinite(operator.adjoint(emission).as_array()))
+
+
+@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
+@pytest.mark.parametrize("dtype", ["float32", "float64"])
+def test_cuda_dtype_forward_adjoint_dot_product(dtype):
+    """CUDA-only dtype regression for the real torch kernels (not the CPU delegate)."""
+    geometry = make_cil_geometry(dtype=np.float64)
+    operator = get_kernel_operator(
+        geometry,
+        backend='torch',
+        device='cuda',
+        dtype=dtype,
+        num_neighbours=5,
+        sigma_anat=0.5,
+        sigma_dist=1.0,
+        normalize_kernel=True,
+        use_mask=False,
+        hybrid=False,
+    )
+    assert operator.device.type == 'cuda'
+    assert operator.torch_dtype == getattr(torch, dtype)
+
+    grid = np.indices(geometry.shape).sum(axis=0) / float(np.prod(geometry.shape))
+    operator.set_anatomical_image(make_cil_image(geometry, grid))
+
+    rng = np.random.default_rng(21)
+    x = make_cil_image(geometry, rng.normal(size=geometry.shape))
+    y = make_cil_image(geometry, rng.normal(size=geometry.shape))
+
+    forward = operator.direct(x).as_array()
+    adjoint = operator.adjoint(y).as_array()
+
+    dot_forward = float(np.sum(forward * y.as_array()))
+    dot_adjoint = float(np.sum(x.as_array() * adjoint))
+    assert np.isclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
+
+
 class TestAutoBackendSelection:
     """Test automatic backend selection."""
 
@@ -660,18 +883,14 @@ class TestAutoBackendSelection:
             backend='auto',
         )
 
-        # Should select torch if available, otherwise numba
-        if TORCH_AVAILABLE and CUDA_AVAILABLE:
+        # Should select torch if CUDA is available, otherwise numba
+        if CUDA_AVAILABLE:
             assert op.backend == 'torch'
         else:
-            # Will fall back to numba or torch CPU
-            assert op.backend in ['torch', 'numba']
+            assert op.backend == 'numba'
 
     def test_explicit_backend_override(self, small_geometry):
         """Test explicit backend selection overrides auto."""
-        if not TORCH_AVAILABLE:
-            pytest.skip("PyTorch not available")
-
         op = get_kernel_operator(
             small_geometry,
             backend='torch',

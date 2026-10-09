@@ -44,10 +44,11 @@ class DirectionalOperator(LinearOperator):
 
     def direct(self, x, out=None):
 
+        result = x - self.gamma * self.xi * self.dot(self.xi, x)
         if out is None:
-            return x - self.gamma * self.xi * self.dot(self.xi, x)
-        else:
-            out.fill(x - self.gamma * self.xi * self.dot(self.xi, x))
+            return result
+        out.fill(result)
+        return out
 
     def adjoint(self, x, out=None):
         # This is the same as the direct operator

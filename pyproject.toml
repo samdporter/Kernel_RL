@@ -35,8 +35,9 @@ classifiers = [
 ]
 
 # NOTE: CIL is a runtime requirement but is not pip-installable from PyPI.
-# Install CIL first (conda: `conda install -c conda-forge -c ccpi cil`),
-# then `pip install cil-krl`.
+# Install CIL first (conda: `conda install -c conda-forge -c ccpi cil`), then
+# install this package from source (`pip install -e .`) or from a built wheel;
+# it is not published on PyPI either.
 dependencies = [
     "numpy>=1.23",
     "scipy>=1.7",

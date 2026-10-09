@@ -37,4 +37,4 @@ Executable scripts for experiments and examples.
   - GPU acceleration: Enables 256³ volumes on consumer GPUs (RTX 3060+)
   - Memory (256³ with float32): 3.6 GB (n=5, k=20) to 8.8 GB (n=7, k=48)
 
-See [../docs/GETTING-STARTED.md](../docs/GETTING-STARTED.md) for usage.
+See the [top-level README](../../README.md) for installation and usage.

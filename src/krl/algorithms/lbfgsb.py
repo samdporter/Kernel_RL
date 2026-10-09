@@ -26,7 +26,7 @@ class _ImageArrayAdapter:
     def __init__(self, template: ImageData):
         self.shape = template.shape
         self.size = int(np.prod(self.shape))
-        self._working_image = template.geometry.allocate(value=0)
+        self._working_image = template.geometry.allocate(value=0, dtype=template.dtype)
 
     def array_to_image(self, array: np.ndarray) -> ImageData:
         self._working_image.fill(array.reshape(self.shape))

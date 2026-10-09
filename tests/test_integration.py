@@ -3,9 +3,19 @@
 import numpy as np
 import pytest
 from cil.framework import ImageGeometry
+from cil.optimisation.functions import (
+    L2NormSquared,
+    OperatorCompositionFunction,
+    SmoothMixedL21Norm,
+)
+from cil.optimisation.operators import CompositionOperator, GradientOperator
 
+from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
+from krl.algorithms.maprl import MAPRL
 from krl.algorithms.richardson_lucy import RichardsonLucy
+from krl.callbacks import NRMSECallback, SaveIterationCallback
 from krl.operators.blurring import create_gaussian_blur
+from krl.operators.directional import DirectionalOperator
 from krl.operators.kernel_operator import get_kernel_operator
 
 
@@ -26,19 +36,51 @@ def phantom(geometry):
     return img
 
 
-def test_richardson_lucy_reduces_kl(phantom):
-    """RL deconvolution should decrease the KL divergence to the observed data."""
+@pytest.fixture
+def blur(geometry):
     # Explicit backend: 'auto' would probe torch by importing it, which breaks
     # OpenMP when CIL's native libs are already loaded (see README notes).
-    blur = create_gaussian_blur(sigma=(1.0, 1.0, 1.0), geometry=phantom.geometry, backend="numba")
-    observed = blur.direct(phantom)
+    return create_gaussian_blur(sigma=(1.0, 1.0, 1.0), geometry=geometry, backend="numba")
 
-    def kl_to_observed(img):
-        sim = blur.direct(img).as_array()
-        obs = observed.as_array()
-        sim = np.clip(sim, 1e-9, None)
-        return float(np.sum(sim - obs - obs * np.log(sim / np.clip(obs, 1e-9, None))))
 
+@pytest.fixture
+def observed(phantom, blur):
+    return blur.direct(phantom)
+
+
+def data_objective(operator, observed, image):
+    """KL divergence between ``operator.direct(image)`` and the observed data."""
+    sim = np.clip(operator.direct(image).as_array(), 1e-9, None)
+    obs = observed.as_array()
+    return float(np.sum(sim - obs - obs * np.log(sim / np.clip(obs, 1e-9, None))))
+
+
+def make_kernel(geometry, anatomical, hybrid=False):
+    kernel = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        sigma_emission=0.5,
+        use_mask=True,
+        mask_k=10,
+        normalize_kernel=True,
+        hybrid=hybrid,
+    )
+    kernel.set_anatomical_image(anatomical)
+    return kernel
+
+
+def make_dtv_prior(geometry, anatomical, observed, alpha=0.01):
+    gradient = GradientOperator(geometry, method="forward", bnd_cond="Neumann")
+    directional = CompositionOperator(DirectionalOperator(gradient.direct(anatomical)), gradient)
+    return alpha * OperatorCompositionFunction(
+        SmoothMixedL21Norm(epsilon=observed.max() * 1e-2), directional
+    )
+
+
+def test_richardson_lucy_reduces_kl(phantom, blur, observed):
+    """RL deconvolution should decrease the KL divergence to the observed data."""
     rl = RichardsonLucy(
         initial_estimate=observed,
         blurring_operator=blur,
@@ -46,30 +88,112 @@ def test_richardson_lucy_reduces_kl(phantom):
     )
     rl.run(iterations=5, verbose=0)
 
-    result = rl.get_output() if rl.get_output() is not None else rl.x
+    result = rl.get_output()
     assert result is not None
     assert float(np.all(np.isfinite(result.as_array())))
-    assert kl_to_observed(result) < kl_to_observed(observed)
+    assert data_objective(blur, observed, result) < data_objective(blur, observed, observed)
 
 
-def test_krl_end_to_end_matches_unkernelised_direction(phantom):
-    """KRL with anatomical guidance runs and stays non-negative."""
-    guidance = phantom.clone()  # perfectly correlated anatomy
-    kernel_op = get_kernel_operator(
-        phantom.geometry,
-        backend="numba",
-        num_neighbours=3,
-        sigma_anat=0.5,
-        use_mask=True,
-        mask_k=10,
-        normalize_kernel=True,
-        hybrid=False,
+def test_krl_end_to_end_reduces_data_objective(phantom, blur, observed):
+    """Fixed-kernel KRL should decrease the data objective of the reconstruction."""
+    kernel = make_kernel(phantom.geometry, phantom, hybrid=False)
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur,
+        observed_data=observed,
+        kernel_operator=kernel,
     )
-    kernel_op.set_anatomical_image(guidance)
+    rl.run(iterations=5, verbose=0)
 
-    blurred = kernel_op.direct(phantom)
-    assert float(blurred.min()) >= -1e-6
-    assert blurred.shape == phantom.shape
+    result = rl.get_output()
+    baseline = kernel.direct(observed)
+    assert float(np.all(np.isfinite(result.as_array())))
+    assert float(result.min()) >= -1e-6
+    assert data_objective(blur, observed, result) < data_objective(blur, observed, baseline)
+
+
+def test_hkrl_with_freezing_runs(phantom, blur, observed):
+    """HKRL runs end-to-end and freezes its hybrid emission reference."""
+    kernel = make_kernel(phantom.geometry, phantom, hybrid=True)
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur,
+        observed_data=observed,
+        kernel_operator=kernel,
+        freeze_iteration=2,
+    )
+    rl.run(iterations=5, verbose=0)
+
+    result = rl.get_output()
+    assert rl._update_count == 5
+    assert kernel.freeze_emission_kernel
+    assert float(np.all(np.isfinite(result.as_array())))
+    assert float(result.min()) >= -1e-6
+
+
+def test_maprl_with_dtv_prior_runs(phantom, observed):
+    """MAPRL runs end-to-end with a real DTV prior and a real CIL fidelity."""
+    prior = make_dtv_prior(phantom.geometry, phantom, observed)
+    maprl = MAPRL(
+        initial_estimate=observed.clone(),
+        data_fidelity=L2NormSquared(b=observed),
+        prior=prior,
+        step_size=1e-3,
+        relaxation_eta=0.0,
+        initial_line_search=False,
+        armijo_iterations=0,
+    )
+    maprl.run(iterations=5, verbose=0)
+
+    assert maprl._update_count == 5
+    assert float(np.all(np.isfinite(maprl.x.as_array())))
+    assert float(maprl.x.min()) >= -1e-6
+    assert maprl.loss[-1] < maprl.loss[0]
+
+
+def test_lbfgsb_reduces_objective(phantom, observed):
+    """L-BFGS-B reduces a simple real-CIL objective."""
+    prior = make_dtv_prior(phantom.geometry, phantom, observed)
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=observed.clone(),
+        data_fidelity=L2NormSquared(b=observed),
+        prior=prior,
+        options=LBFGSBOptions(ftol=1e-10, gtol=1e-10),
+    )
+    optimizer.run(iterations=15, verbose=0)
+
+    assert float(np.all(np.isfinite(optimizer.solution.as_array())))
+    assert optimizer.objective[-1] < optimizer.objective[0]
+
+
+def test_callbacks_run_through_cil_algorithm(phantom, blur, observed, tmp_path):
+    """NRMSE and SaveIteration callbacks run through a real CIL Algorithm.run()."""
+    nrmse = NRMSECallback(
+        phantom,
+        tmp_path / "nrmse.csv",
+        interval=1,
+        verbose=False,
+    )
+    save = SaveIterationCallback(
+        tmp_path / "iterations",
+        interval=10,
+        prefix="iter",
+        save_first_n=2,
+    )
+
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur,
+        observed_data=observed,
+    )
+    rl.run(iterations=3, verbose=0, callbacks=[nrmse, save])
+
+    assert len(nrmse.nrmse_values) == 4
+    assert all(np.isfinite(value) for _, value in nrmse.nrmse_values)
+    assert (tmp_path / "nrmse.csv").exists()
+
+    saved = sorted((tmp_path / "iterations").glob("iter_*.nii.gz"))
+    assert len(saved) == 3
 
 
 def test_import_krl_does_not_pull_torch():

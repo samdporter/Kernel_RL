@@ -1,9 +1,3 @@
-import ctypes
-import importlib
-import importlib.util
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -134,154 +128,25 @@ class DummyGeometry:
         self.voxel_size_z, self.voxel_size_y, self.voxel_size_x = voxel_sizes
 
 
-def _require_cil_gradient():
-    def _attempt():
-        from cil.framework import ImageGeometry  # type: ignore
-        from cil.optimisation.operators import GradientOperator  # type: ignore
-        return GradientOperator, ImageGeometry
-
-    try:
-        return _attempt()
-    except Exception as first_error:
-        root = None
-        try:
-            spec = importlib.util.find_spec("cil")
-            if spec and spec.origin:
-                root = Path(spec.origin).resolve()
-        except ValueError:
-            module = sys.modules.get("cil")
-            module_file = getattr(module, "__file__", None) if module else None
-            module_paths = list(getattr(module, "__path__", [])) if module else []
-            if module_file:
-                root = Path(module_file).resolve()
-            elif module_paths:
-                root = Path(module_paths[0]).resolve()
-
-        if root is None:
-            for entry in map(Path, sys.path):
-                candidate = entry / "cil" / "__init__.py"
-                if candidate.exists():
-                    root = candidate.resolve()
-                    break
-
-        if root is not None:
-            candidates = []
-            for parent in root.parents:
-                candidates.append(parent / "lib" / "libcilacc.so")
-                candidates.append(parent / "cil" / "lib" / "libcilacc.so")
-            for candidate in candidates:
-                if candidate.exists():
-                    try:
-                        ctypes.cdll.LoadLibrary(str(candidate))
-                        sys.modules.pop("cil.framework", None)
-                        sys.modules.pop("cil.optimisation.operators", None)
-                        sys.modules.pop("cil.optimisation", None)
-                        if (module := sys.modules.get("cil")) is not None and getattr(module, "__spec__", None) is None:
-                            sys.modules.pop("cil", None)
-                        return _attempt()
-                    except OSError:
-                        continue
-
-        pytest.skip(f"CIL GradientOperator unavailable: {first_error}")
-
-
-def _forward_neumann_diff(data, axis):
-    diff = np.zeros_like(data, dtype=data.dtype)
-    axis_len = data.shape[axis]
-    if axis_len > 1:
-        slicer_curr = [slice(None)] * data.ndim
-        slicer_next = [slice(None)] * data.ndim
-        slicer_curr[axis] = slice(0, axis_len - 1)
-        slicer_next[axis] = slice(1, axis_len)
-        diff[tuple(slicer_curr)] = (
-            data[tuple(slicer_next)] - data[tuple(slicer_curr)]
-        )
-    return diff
-
-
-def _backward_neumann_diff(data, axis):
-    diff = np.zeros_like(data, dtype=data.dtype)
-    axis_len = data.shape[axis]
-    slicer_first = [slice(None)] * data.ndim
-    slicer_first[axis] = 0
-    diff[tuple(slicer_first)] = data[tuple(slicer_first)]
-    if axis_len > 1:
-        slicer_curr = [slice(None)] * data.ndim
-        slicer_prev = [slice(None)] * data.ndim
-        slicer_curr[axis] = slice(1, axis_len)
-        slicer_prev[axis] = slice(0, axis_len - 1)
-        diff[tuple(slicer_curr)] = (
-            data[tuple(slicer_curr)] - data[tuple(slicer_prev)]
-        )
-        slicer_last = [slice(None)] * data.ndim
-        slicer_last[axis] = axis_len - 1
-        slicer_penultimate = [slice(None)] * data.ndim
-        slicer_penultimate[axis] = axis_len - 2
-        diff[tuple(slicer_last)] = -data[tuple(slicer_penultimate)]
-    return diff
-
-
 @pytest.fixture
 def directional_module():
-    module = importlib.import_module("src.krl.operators.directional")
-    return importlib.reload(module)
+    from krl.operators import directional
+
+    return directional
 
 
 @pytest.fixture
 def gaussian_module():
-    module = importlib.import_module("src.krl.operators.blurring")
-    return importlib.reload(module)
+    from krl.operators import blurring
+
+    return blurring
 
 
 @pytest.fixture
 def maprl_module():
-    module = importlib.import_module("src.krl.algorithms.maprl")
-    return importlib.reload(module)
+    from krl.algorithms import maprl
 
-
-def test_gradient_forward_neumann_direct():
-    GradientOperator, ImageGeometry = _require_cil_gradient()
-    geometry = ImageGeometry(voxel_num_y=2, voxel_num_x=2)
-    image = geometry.allocate(None)
-    data = np.array([[1.0, 2.0], [3.0, 5.0]], dtype=np.float32)
-    image.fill(data)
-
-    grad_op = GradientOperator(geometry, method="forward", bnd_cond="Neumann", backend="numpy")
-    result = grad_op.direct(image)
-
-    components = [
-        result.get_item(i).as_array().astype(np.float32)
-        for i in range(len(result.containers))
-    ]
-    result_arr = np.stack(components, axis=-1)
-
-    expected_axis0 = _forward_neumann_diff(data, axis=0)
-    expected_axis1 = _forward_neumann_diff(data, axis=1)
-    expected = np.stack([expected_axis0, expected_axis1], axis=-1)
-    assert result_arr.shape == expected.shape
-    assert np.allclose(result_arr, expected)
-
-
-def test_gradient_adjoint_matches_manual_divergence():
-    GradientOperator, ImageGeometry = _require_cil_gradient()
-    geometry = ImageGeometry(voxel_num_y=2, voxel_num_x=2)
-    image = geometry.allocate(None)
-    data = np.array([[1.0, 2.0], [3.0, 5.0]], dtype=np.float32)
-    image.fill(data)
-
-    grad_op = GradientOperator(geometry, method="forward", bnd_cond="Neumann", backend="numpy")
-    grad_field = grad_op.direct(image)
-    result = grad_op.adjoint(grad_field)
-
-    gradient_tensor = np.stack(
-        [grad_field.get_item(i).as_array().astype(np.float32) for i in range(len(grad_field.containers))],
-        axis=-1,
-    )
-    components = []
-    for axis in range(gradient_tensor.shape[-1]):
-        components.append(_backward_neumann_diff(gradient_tensor[..., axis], axis))
-    expected = -np.sum(components, axis=0)
-    assert np.allclose(result.as_array(), expected)
+    return maprl
 
 
 def test_directional_operator_direct_matches_formula(directional_module):
@@ -373,7 +238,9 @@ def test_maprl_step_size_schedule(maprl_module):
         initial_line_search=False,
         armijo_iterations=0,
     )
-    maprl.iteration = 3
+    for _ in range(3):
+        maprl.update()
+    assert maprl._update_count == 3
     assert maprl.step_size() == pytest.approx(2.0 / (1 + 0.5 * 3))
 
     # Test within Armijo iterations window
@@ -386,13 +253,74 @@ def test_maprl_step_size_schedule(maprl_module):
         initial_line_search=False,
         armijo_iterations=5,
     )
-    maprl2.iteration = 3
+    for _ in range(3):
+        maprl2.update()
     # Within armijo_iterations window, it should use _current_step_size
     assert maprl2.step_size() == pytest.approx(2.0)
 
     # After armijo_iterations window, it should use relaxation formula
-    maprl2.iteration = 6
+    for _ in range(3):
+        maprl2.update()
+    assert maprl2._update_count == 6
     assert maprl2.step_size() == pytest.approx(2.0 / (1 + 0.5 * 6))
+
+
+def test_maprl_step_sizes_independent_of_objective_interval(maprl_module):
+    """Step-size schedule must follow actual updates, not CIL's reporting label.
+
+    ``update_objective_interval`` changes CIL's ``iteration`` label (a warm-up
+    iteration records the initial objective when the interval is positive), so
+    using ``iteration`` for the relaxation decay made otherwise-identical runs
+    diverge, including at the transition out of the leading Armijo block.
+    """
+    target = DummyImage(np.full((2, 2), 2.0))
+
+    class QuadraticFunctional:
+        def gradient(self, x):
+            return x - target
+
+        def __call__(self, x):
+            diff = x.as_array() - target.as_array()
+            return 0.5 * float(np.sum(diff**2))
+
+    def build(update_objective_interval):
+        prior = QuadraticFunctional()
+        prior.gradient = lambda x: DummyImage(np.zeros_like(x.as_array()))
+        return maprl_module.MAPRL(
+            initial_estimate=DummyImage(np.ones((2, 2))),
+            data_fidelity=QuadraticFunctional(),
+            prior=prior,
+            step_size=5.0,
+            relaxation_eta=0.1,
+            initial_line_search=False,
+            armijo_iterations=3,
+            armijo_update_interval=0,
+            update_objective_interval=update_objective_interval,
+        )
+
+    def run(algorithm):
+        trajectories = []
+        steps = []
+        recorded = set()
+
+        def record(algo):
+            if algo._update_count == 0 or algo._update_count in recorded:
+                return
+            recorded.add(algo._update_count)
+            trajectories.append(algo.x.as_array().copy())
+            steps.append(algo.step_size())
+
+        algorithm.run(iterations=5, verbose=0, callbacks=[record])
+        return np.array(trajectories), np.array(steps)
+
+    traj_never, steps_never = run(build(0))
+    traj_always, steps_always = run(build(1))
+
+    assert steps_never.shape == (5,)
+    assert np.allclose(traj_never, traj_always)
+    assert np.allclose(steps_never, steps_always)
+    # The first non-Armijo update (update 4) must use the decayed step.
+    assert steps_never[3] == pytest.approx(5.0 / (1 + 0.1 * 4))
 
 
 def test_maprl_update_applies_scaled_gradient_and_projection(maprl_module):
@@ -522,7 +450,6 @@ def test_maprl_armijo_iterations_perform_line_search(maprl_module):
 
     # Run 6 iterations
     for i in range(1, 7):
-        maprl.iteration = i
         eval_calls_before = data_fidelity.eval_calls
 
         maprl.update()

@@ -1,7 +1,12 @@
 # --- Numba implementations for CPU acceleration ---
+import importlib.util
+import platform
+
 import numba
 import numpy as np
 from cil.optimisation.operators import LinearOperator
+
+_BACKENDS = ("auto", "torch", "numba", "scipy")
 
 
 @numba.jit(nopython=True, parallel=True)
@@ -27,6 +32,15 @@ def _numba_convolve_3d(x, psf):
 
 class GaussianBlurringOperator(LinearOperator):
     def __init__(self, sigma, domain_geometry, backend='auto'):
+        if backend not in _BACKENDS:
+            raise ValueError(
+                f"Backend '{backend}' not supported. "
+                "Use 'auto', 'torch', 'numba', or 'scipy'."
+            )
+        sigma = np.asarray(sigma, dtype=np.float64)
+        if sigma.shape != (3,) or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0.0):
+            raise ValueError("sigma must contain three positive finite values.")
+
         super().__init__(domain_geometry=domain_geometry,
                          range_geometry=domain_geometry)
         voxel_sizes = np.array([
@@ -34,22 +48,29 @@ class GaussianBlurringOperator(LinearOperator):
             domain_geometry.voxel_size_y,
             domain_geometry.voxel_size_x,
         ])
-        self.sigma = np.array(sigma) / voxel_sizes
+        self.sigma = sigma / voxel_sizes
         self.psf = self._make_psf(self.sigma)
         # choose backend
         if backend == 'auto':
-            for b in ('torch', 'numba', 'scipy'):
-                try:
-                    if b == 'torch':
-                        import torch
-                        if not torch.cuda.is_available():
-                            continue  # Skip torch if CUDA not available
-                    else:
-                        __import__(b)
-                    backend = b
-                    break
-                except ImportError:
-                    continue
+            if platform.system() == 'Darwin':
+                backend = (
+                    'numba' if importlib.util.find_spec('numba') is not None else 'scipy'
+                )
+            else:
+                for b in ('torch', 'numba', 'scipy'):
+                    try:
+                        if b == 'torch':
+                            import torch
+                            if not torch.cuda.is_available():
+                                continue  # Skip torch if CUDA not available
+                        else:
+                            __import__(b)
+                        backend = b
+                        break
+                    except ImportError:
+                        continue
+                if backend == 'auto':
+                    backend = 'scipy'
         self.backend = backend
         if backend == 'torch':
             import torch
