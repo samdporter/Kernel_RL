@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-09
+
+Metadata-only correction; no code changes.
+
+### Changed
+- Corrected author order so Sam Porter is listed first in `pyproject.toml`,
+  `CITATION.cff`, `src/krl/__init__.py` and the README citation.
+
 ## [0.3.0] - 2026-10-09
 
 Fixes and cleanup from the post-release hardening pass; no new features.

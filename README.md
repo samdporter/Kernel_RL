@@ -240,7 +240,7 @@ If you use cil-krl in your research, please cite it and CIL:
 
 ```bibtex
 @software{krl2025,
-  author = {Erlandsson, Kjell and Porter, Sam},
+  author = {Porter, Sam and Erlandsson, Kjell},
   title = {cil-krl: Kernelised Richardson-Lucy Deconvolution for PET},
   year = {2025},
   url = {https://github.com/samdporter/Kernel_RL}
