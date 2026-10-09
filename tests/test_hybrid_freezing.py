@@ -7,134 +7,47 @@ function converges properly.
 
 import numpy as np
 import pytest
+from cil.framework import ImageGeometry
 
-from krl.operators.kernel_operator import (
-    NUMBA_AVAIL,
-    get_kernel_operator,
-)
-
-if not NUMBA_AVAIL:
-    pytest.skip(
-        "Numba backend required for hybrid freezing tests.",
-        allow_module_level=True,
-    )
+from krl.operators.kernel_operator import get_kernel_operator
 
 
-class DummyGeometry:
-    """Minimal geometry mock for testing."""
-    def __init__(self, shape):
-        self.shape = shape
-        self.voxel_size_x = 1.0
-        self.voxel_size_y = 1.0
-        self.voxel_size_z = 1.0
-
-    def allocate(self, value=0.0):
-        data = np.full(self.shape, value, dtype=np.float64)
-        return DummyImage(data)
+def make_geometry(shape=(10, 10, 10)):
+    z, y, x = shape
+    return ImageGeometry(voxel_num_x=x, voxel_num_y=y, voxel_num_z=z, dtype=np.float64)
 
 
-class DummyImage:
-    """Minimal image mock for testing."""
-    def __init__(self, data, geometry=None):
-        self._data = np.asarray(data, dtype=np.float64)
-        self.geometry = geometry or DummyGeometry(data.shape)
-
-    @property
-    def shape(self):
-        return self._data.shape
-
-    def as_array(self):
-        return self._data
-
-    def clone(self):
-        return DummyImage(self._data.copy(), self.geometry)
-
-    def fill(self, values):
-        self._data[...] = np.asarray(values, dtype=np.float64)
-
-    def __truediv__(self, other):
-        if isinstance(other, DummyImage):
-            return DummyImage(self._data / (other._data + 1e-10), self.geometry)
-        return DummyImage(self._data / other, self.geometry)
-
-    def __mul__(self, other):
-        if isinstance(other, DummyImage):
-            return DummyImage(self._data * other._data, self.geometry)
-        return DummyImage(self._data * other, self.geometry)
-
-    def __add__(self, other):
-        if isinstance(other, DummyImage):
-            return DummyImage(self._data + other._data, self.geometry)
-        return DummyImage(self._data + other, self.geometry)
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        if isinstance(other, DummyImage):
-            return DummyImage(self._data - other._data, self.geometry)
-        return DummyImage(self._data - other, self.geometry)
-
-    def __rsub__(self, other):
-        if isinstance(other, DummyImage):
-            return DummyImage(other._data - self._data, self.geometry)
-        return DummyImage(other - self._data, self.geometry)
-
-    def __imul__(self, other):
-        if isinstance(other, DummyImage):
-            self._data *= other._data
-        else:
-            self._data *= other
-        return self
-
-    def __idiv__(self, other):
-        if isinstance(other, DummyImage):
-            self._data /= (other._data + 1e-10)
-        else:
-            self._data /= other
-        return self
-
-    def log(self):
-        return DummyImage(np.log(self._data + 1e-10), self.geometry)
-
-    def sum(self):
-        return self._data.sum()
-
-    def maximum(self, value, out=None):
-        result = np.maximum(self._data, value)
-        if out is not None:
-            out._data[...] = result
-        return DummyImage(result, self.geometry)
+def make_image(geometry, array):
+    image = geometry.allocate()
+    image.fill(np.asarray(array, dtype=geometry.dtype))
+    return image
 
 
 @pytest.fixture
 def geometry():
     """Small 3D geometry for testing."""
-    return DummyGeometry((10, 10, 10))
+    return make_geometry((10, 10, 10))
 
 
 @pytest.fixture
 def anatomical_image(geometry):
     """Anatomical image with spatial variation."""
     rng = np.random.default_rng(42)
-    arr = rng.normal(loc=100, scale=20, size=geometry.shape)
-    return DummyImage(arr)
+    return make_image(geometry, rng.normal(loc=100, scale=20, size=geometry.shape))
 
 
 @pytest.fixture
 def emission_v1(geometry):
     """First emission image."""
     rng = np.random.default_rng(123)
-    arr = rng.uniform(low=50, high=150, size=geometry.shape)
-    return DummyImage(arr)
+    return make_image(geometry, rng.uniform(low=50, high=150, size=geometry.shape))
 
 
 @pytest.fixture
 def emission_v2(geometry):
     """Second emission image (different from v1)."""
     rng = np.random.default_rng(456)
-    arr = rng.uniform(low=50, high=150, size=geometry.shape)
-    return DummyImage(arr)
+    return make_image(geometry, rng.uniform(low=50, high=150, size=geometry.shape))
 
 
 def test_hybrid_kernel_updates_without_freeze(geometry, anatomical_image, emission_v1, emission_v2):
@@ -208,7 +121,7 @@ def test_hybrid_kernel_freezes_when_flag_set(geometry, anatomical_image, emissio
     assert not np.allclose(frozen_ref2, emission_v2.as_array(), rtol=1e-10)
 
     # Third forward pass with yet another emission
-    emission_v3 = DummyImage(np.random.default_rng(789).uniform(50, 150, geometry.shape))
+    emission_v3 = make_image(geometry, np.random.default_rng(789).uniform(50, 150, geometry.shape))
     result3 = operator.direct(emission_v3)
     frozen_ref3 = operator.frozen_emission_kernel.copy()
 
@@ -426,6 +339,67 @@ def test_frozen_adjoint_uses_same_reference_as_forward(geometry, anatomical_imag
     assert not np.allclose(frozen_ref_after_adj, emission_v2.as_array(), rtol=1e-10)
 
 
+def test_frozen_hybrid_adjoint_dot_product(geometry, anatomical_image, emission_v1):
+    """The frozen hybrid kernel must satisfy the adjoint dot-product identity."""
+    operator = get_kernel_operator(
+        geometry,
+        backend='numba',
+        num_neighbours=3,
+        sigma_anat=0.5,
+        sigma_dist=1.0,
+        sigma_emission=0.5,
+        normalize_kernel=True,
+        hybrid=True,
+        use_mask=False,
+    )
+    operator.set_anatomical_image(anatomical_image)
+
+    # Freeze the emission reference on the first forward pass.
+    operator.freeze_emission_kernel = True
+    operator.direct(emission_v1)
+
+    rng = np.random.default_rng(99)
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
+
+    forward = operator.direct(x).as_array()
+    adjoint = operator.adjoint(y).as_array()
+
+    dot_forward = float(np.sum(forward * y.as_array()))
+    dot_adjoint = float(np.sum(x.as_array() * adjoint))
+    assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
+
+
+def test_frozen_hybrid_direct_is_linear(geometry, anatomical_image, emission_v1):
+    """A frozen hybrid kernel is a fixed linear operator."""
+    operator = get_kernel_operator(
+        geometry,
+        backend='numba',
+        num_neighbours=3,
+        sigma_anat=0.5,
+        sigma_emission=0.5,
+        normalize_kernel=True,
+        hybrid=True,
+        use_mask=False,
+    )
+    operator.set_anatomical_image(anatomical_image)
+
+    # Freeze the emission reference on the first forward pass.
+    operator.freeze_emission_kernel = True
+    operator.direct(emission_v1)
+
+    rng = np.random.default_rng(7)
+    x1 = make_image(geometry, rng.normal(size=geometry.shape))
+    x2 = make_image(geometry, rng.normal(size=geometry.shape))
+    a, b = 0.7, -0.3
+
+    combined = make_image(geometry, a * x1.as_array() + b * x2.as_array())
+    lhs = operator.direct(combined).as_array()
+    rhs = a * operator.direct(x1).as_array() + b * operator.direct(x2).as_array()
+
+    assert np.allclose(lhs, rhs, atol=1e-8, rtol=1e-8)
+
+
 def test_richardson_lucy_style_iteration_with_freezing(geometry, anatomical_image):
     """Simulate a few RL iterations with freezing to ensure stability.
 
@@ -445,7 +419,7 @@ def test_richardson_lucy_style_iteration_with_freezing(geometry, anatomical_imag
 
     # Initial emission estimate
     rng = np.random.default_rng(42)
-    x_current = DummyImage(rng.uniform(50, 150, geometry.shape))
+    x_current = make_image(geometry, rng.uniform(50, 150, geometry.shape))
 
     frozen_refs = []
 

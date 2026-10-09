@@ -1,5 +1,9 @@
 .PHONY: help install test test-cov lint format gpu-test build study-install study-test study-lint study-docker-pull study-sirf-test study-docker-python study-docker-run
 
+# Interpreter that has CIL installed, e.g. the python of a micromamba env:
+#   make test PYTHON=$(micromamba run -n krl which python)
+PYTHON ?= python
+
 help:
 	@echo "cil-krl development commands"
 	@echo "============================"
@@ -17,24 +21,27 @@ help:
 	@echo "  make study-sirf-test   - run SIRF tests in container"
 	@echo "  make study-docker-python - open python shell in SIRF container"
 	@echo "  make study-docker-run  - run a study scenario in container (SCENARIO=path ARGS=... required)"
+	@echo ""
+	@echo "Set PYTHON to the interpreter that has CIL, e.g.:"
+	@echo "  make install PYTHON=\$$(micromamba run -n krl which python)"
 
 install:
-	uv pip install -e ".[dev]"
+	uv pip install --python "$(PYTHON)" -e ".[dev]"
 
 test:
-	python -m pytest tests/
+	$(PYTHON) -m pytest tests/
 
 gpu-test:
-	KRL_RUN_GPU_TESTS=1 python -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py
+	KRL_RUN_GPU_TESTS=1 $(PYTHON) -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py
 
 lint:
-	ruff check src/ tests/
+	$(PYTHON) -m ruff check src/ tests/
 
 format:
-	ruff check src/ tests/ --fix
+	$(PYTHON) -m ruff check src/ tests/ --fix
 
 build:
-	python -m build
+	uv build
 
 study-install:
 	uv pip install -e "./studies[dev]"

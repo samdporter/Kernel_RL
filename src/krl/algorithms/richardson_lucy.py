@@ -31,7 +31,7 @@ class RichardsonLucy(Algorithm):
         the forward operator becomes blur ∘ kernel.
     freeze_iteration : int, optional
         If > 0 and kernel_operator is provided, freeze the kernel operator
-        at this iteration (default: 0, no freezing)
+        after this many updates (default: 0, no freezing)
     epsilon : float, optional
         Small value to avoid division by zero (default: 1e-10)
     update_objective_interval : int, optional
@@ -94,30 +94,24 @@ class RichardsonLucy(Algorithm):
         # Initialize estimate
         self.x = initial_estimate.clone()
 
+        # Counts actual updates independently of CIL's reporting label so that
+        # scheduling remains correct for any update_objective_interval.
+        self._update_count = 0
+
         # Build effective forward operator
         if kernel_operator is not None:
             # KRL/HKRL mode: compose blur and kernel
-            try:
-                self.forward_operator = op.CompositionOperator(blurring_operator, kernel_operator)
-            except NameError:
-                # Fallback if op is not available
-                self.forward_operator = None
+            self.forward_operator = op.CompositionOperator(blurring_operator, kernel_operator)
         else:
             # Standard RL mode
             self.forward_operator = blurring_operator
 
         # Initialize estimated blur first (required before adjoint when using normalize_kernel=True)
-        if self.forward_operator is not None:
-            self.est_blur = self.forward_operator.direct(self.x)
-        else:
-            self.est_blur = self.x.clone()
+        self.est_blur = self.forward_operator.direct(self.x)
 
         # Compute sensitivity (normalization factor) after direct() call
         geometry = observed_data.geometry
-        if self.forward_operator is not None:
-            self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
-        else:
-            self.sensitivity = geometry.allocate(value=1)
+        self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
 
         self.configured = True
 
@@ -133,6 +127,8 @@ class RichardsonLucy(Algorithm):
 
     def update(self):
         """Perform one RL iteration."""
+        self._update_count += 1
+
         # RL update: x *= (A^T (y / Ax)) / sensitivity
         ratio = self.observed_data / (self.est_blur + self.epsilon)
         correction = self.forward_operator.adjoint(ratio)
@@ -157,13 +153,12 @@ class RichardsonLucy(Algorithm):
             geometry = self.observed_data.geometry
             self.sensitivity = self.forward_operator.adjoint(geometry.allocate(value=1))
 
-        # Handle freezing AFTER the iteration completes
-        # CIL increments self.iteration AFTER this method returns.
-        # freeze_iteration=N means freeze AFTER N completed updates.
-        # So when self.iteration == freeze_iteration - 1 (before increment), this was the N-th update.
+        # Handle freezing AFTER the completed update.
+        # freeze_iteration counts actual updates, so freezing happens once the
+        # N-th update has been applied.
         if (
             self.freeze_iteration > 0
-            and self.iteration == self.freeze_iteration - 1
+            and self._update_count == self.freeze_iteration
             and self.kernel_operator is not None
         ):
             self.kernel_operator.freeze_emission_kernel = True

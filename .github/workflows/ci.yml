@@ -7,17 +7,26 @@ on:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }} (CPU)
+    name: Python ${{ matrix.python-version }} (CPU, CIL ${{ matrix.cil-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - python-version: "3.10"
+            cil-version: "25.0.0"
+          - python-version: "3.11"
+            cil-version: "26.0.0"
+          - python-version: "3.12"
+            cil-version: "26.0.0"
+          - python-version: "3.13"
+            cil-version: "26.0.0"
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install CIL via micromamba (not on PyPI)
+        id: cil-env
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: cil-env
@@ -25,32 +34,85 @@ jobs:
             --channel conda-forge
             --channel ccpi
             python=${{ matrix.python-version }}
-            cil
+            cil=${{ matrix.cil-version }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Create venv on top of the conda python
-        run: |
-          UV_PYTHON="$MAMBA_ROOT_PREFIX/envs/cil-env/bin/python"
-          uv venv --python "$UV_PYTHON" .venv
+      - name: Configure interpreter
+        run: echo "CIL_PYTHON=${{ steps.cil-env.outputs.environment-path }}/bin/python" >> "$GITHUB_ENV"
 
       - name: Install package
         run: |
-          uv pip install --python .venv -e ".[dev]"
+          uv pip install --python "$CIL_PYTHON" -e ".[dev]"
 
       - name: Show versions
         run: |
-          .venv/bin/python -c "import cil, krl, numpy, numba; print('cil', cil.__version__, '| krl', krl.__version__, '| numpy', numpy.__version__)"
+          "$CIL_PYTHON" -c "import cil, krl, numpy, numba; print('cil', cil.__version__, '| krl', krl.__version__, '| numpy', numpy.__version__, '| numba', numba.__version__)"
 
       - name: Lint
         run: |
-          uv pip install --python .venv ruff
-          .venv/bin/ruff check src/ tests/
+          "$CIL_PYTHON" -m ruff check src/ tests/
 
       - name: Run CPU tests
         run: |
-          .venv/bin/python -m pytest tests/ -v --tb=short
+          "$CIL_PYTHON" -m pytest tests/ -v --tb=short
+
+  wheel:
+    name: Wheel build + install smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CIL via micromamba (not on PyPI)
+        id: cil-env
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: cil-env
+          create-args: >-
+            --channel conda-forge
+            --channel ccpi
+            python=3.11
+            cil=26.0.0
+
+      - name: Configure interpreter
+        run: echo "CIL_PYTHON=${{ steps.cil-env.outputs.environment-path }}/bin/python" >> "$GITHUB_ENV"
+
+      - name: Build sdist and wheel
+        run: |
+          "$CIL_PYTHON" -m pip install -q build
+          "$CIL_PYTHON" -m build --outdir dist
+
+      - name: Check the wheel ships only the krl package
+        run: |
+          "$CIL_PYTHON" - <<'PY'
+          import glob
+          import zipfile
+
+          (wheel,) = glob.glob("dist/*.whl")
+          names = zipfile.ZipFile(wheel).namelist()
+          assert "krl/__init__.py" in names, names
+          assert not any(n.startswith(("examples/", "tests/")) for n in names), names
+          assert not any(n.endswith("entry_points.txt") for n in names), names
+          print(f"{wheel}: {len(names)} entries; no examples/, tests/ or entry_points.txt")
+          PY
+
+      - name: Install wheel and import from outside the checkout
+        run: |
+          "$CIL_PYTHON" -m pip install -q dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$CIL_PYTHON" - <<'PY'
+          import importlib.metadata as metadata
+
+          import krl
+
+          print("krl.__file__:", krl.__file__)
+          print("krl.__version__:", krl.__version__)
+          print("cil-krl dist version:", metadata.version("cil-krl"))
+          assert "site-packages" in krl.__file__, krl.__file__
+          assert krl.__version__ == metadata.version("cil-krl")
+          assert metadata.distribution("cil-krl").entry_points == []
+          PY
 
   gpu-test:
     name: GPU tests (CUDA)
@@ -60,6 +122,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install CIL via micromamba
+        id: cil-env
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: cil-env
@@ -67,19 +130,24 @@ jobs:
             --channel conda-forge
             --channel ccpi
             python=3.11
-            cil
+            cil=26.0.0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Create venv and install package with torch
+      - name: Configure interpreter
+        run: echo "CIL_PYTHON=${{ steps.cil-env.outputs.environment-path }}/bin/python" >> "$GITHUB_ENV"
+
+      - name: Install package with torch
         run: |
-          UV_PYTHON="$MAMBA_ROOT_PREFIX/envs/cil-env/bin/python"
-          uv venv --python "$UV_PYTHON" .venv
           # CUDA wheels come from the PyTorch index
-          uv pip install --python .venv torch --index-url https://download.pytorch.org/whl/cu124
-          uv pip install --python .venv -e ".[dev]"
+          uv pip install --python "$CIL_PYTHON" torch --index-url https://download.pytorch.org/whl/cu124
+          uv pip install --python "$CIL_PYTHON" -e ".[dev]"
+
+      - name: Verify CUDA is available
+        run: |
+          "$CIL_PYTHON" -c "import torch; assert torch.cuda.is_available(), 'CUDA required for GPU tests'"
 
       - name: Run GPU tests
         run:
-          KRL_RUN_GPU_TESTS=1 .venv/bin/python -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py -v --tb=short
+          KRL_RUN_GPU_TESTS=1 "$CIL_PYTHON" -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py -v --tb=short

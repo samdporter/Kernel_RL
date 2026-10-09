@@ -13,7 +13,9 @@ class NRMSECallback(Callback):
     """
     Callback to compute and save Normalized Root Mean Square Error (NRMSE) per iteration.
 
-    NRMSE is computed as: ||reconstruction - ground_truth|| / max(ground_truth)
+    NRMSE is computed as RMSE normalised by the ground-truth maximum:
+
+        sqrt(mean((reconstruction - ground_truth) ** 2)) / max(ground_truth)
 
     This is useful for quantitative evaluation when a ground truth is available,
     such as with phantom data.
@@ -21,7 +23,8 @@ class NRMSECallback(Callback):
     Parameters
     ----------
     ground_truth : ImageData
-        Ground truth image for comparison
+        Ground truth image for comparison. Its maximum must be positive and
+        finite, otherwise the normalisation is undefined.
     output_file : str or Path
         Path to save NRMSE values (CSV format)
     interval : int, optional
@@ -51,9 +54,16 @@ class NRMSECallback(Callback):
         verbose: bool = True,
     ):
         super().__init__()
+        if isinstance(interval, bool) or not isinstance(interval, (int, np.integer)) or interval < 1:
+            raise ValueError(f"interval must be a positive integer, got {interval!r}")
         self.ground_truth = ground_truth
         self.ground_truth_array = get_array(ground_truth)
         self.gt_max = np.max(self.ground_truth_array)
+        if not np.isfinite(self.gt_max) or self.gt_max <= 0:
+            raise ValueError(
+                "NRMSE normalisation requires a positive finite ground truth "
+                f"maximum, got {self.gt_max!r}"
+            )
         self.output_file = Path(output_file)
         self.interval = interval
         self.kernel_operator = kernel_operator
@@ -109,13 +119,13 @@ class SaveIterationCallback(Callback):
     output_dir : str or Path
         Directory to save iteration files
     interval : int
-        Save every N iterations
+        Save every N iterations (positive integer)
     prefix : str, optional
         Prefix for saved filenames (default: "iter")
     kernel_operator : LinearOperator, optional
         If provided, apply this operator to the solution before saving
     save_first_n : int, optional
-        Save the first N iterations (default: 5)
+        Save the first N iterations (default: 5, non-negative integer)
     """
 
     def __init__(
@@ -127,6 +137,10 @@ class SaveIterationCallback(Callback):
         save_first_n: int = 5,
     ):
         super().__init__()
+        if isinstance(interval, bool) or not isinstance(interval, (int, np.integer)) or interval < 1:
+            raise ValueError(f"interval must be a positive integer, got {interval!r}")
+        if isinstance(save_first_n, bool) or not isinstance(save_first_n, (int, np.integer)) or save_first_n < 0:
+            raise ValueError(f"save_first_n must be a non-negative integer, got {save_first_n!r}")
         self.output_dir = Path(output_dir)
         self.interval = interval
         self.prefix = prefix
@@ -155,9 +169,12 @@ class SaveIterationCallback(Callback):
         # Get current solution
         current_solution = algorithm.solution
 
-        # Apply kernel operator if provided
+        # Apply kernel operator if provided, then clone so the non-negative
+        # clamp below never mutates the algorithm's solution. The clone is
+        # always needed because an operator may return the solution itself.
         if self.kernel_operator is not None:
             current_solution = self.kernel_operator.direct(current_solution)
+        current_solution = current_solution.clone()
 
         # Clamp to non-negative values
         with np.errstate(invalid="ignore"):

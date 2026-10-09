@@ -1,48 +1,26 @@
 import math
-from dataclasses import dataclass
-from typing import Tuple
 
 import numpy as np
 import pytest
+from cil.framework import BlockDataContainer, ImageGeometry
+from cil.optimisation.operators import ScaledOperator
 
+from krl.operators.directional import DirectionalOperator
 from krl.operators.kernel_operator import (
-    NUMBA_AVAIL,
     KernelOperator,
     get_kernel_operator,
 )
 
-if not NUMBA_AVAIL:
-    pytest.skip(
-        "Numba backend required for kernel operator tests.",
-        allow_module_level=True,
-    )
+
+def make_geometry(shape=(5, 5, 5), dtype=np.float64):
+    z, y, x = shape
+    return ImageGeometry(voxel_num_x=x, voxel_num_y=y, voxel_num_z=z, dtype=dtype)
 
 
-@dataclass
-class DummyGeometry:
-    shape: Tuple[int, int, int]
-
-    def allocate(self, value: float = 0.0):
-        data = np.full(self.shape, value, dtype=np.float64)
-        return DummyImage(data)
-
-
-class DummyImage:
-    def __init__(self, data: np.ndarray):
-        self._data = np.asarray(data, dtype=np.float64)
-
-    @property
-    def shape(self):
-        return self._data.shape
-
-    def as_array(self):
-        return self._data
-
-    def clone(self):
-        return DummyImage(self._data.copy())
-
-    def fill(self, values):
-        self._data[...] = np.asarray(values, dtype=np.float64)
+def make_image(geometry, array):
+    image = geometry.allocate()
+    image.fill(np.asarray(array, dtype=geometry.dtype))
+    return image
 
 
 def available_backends():
@@ -51,7 +29,7 @@ def available_backends():
 
 @pytest.fixture
 def geometry():
-    return DummyGeometry((5, 5, 5))
+    return make_geometry((5, 5, 5))
 
 
 @pytest.fixture
@@ -63,22 +41,19 @@ def anatomical_uniform(geometry):
 def emission_spike(geometry):
     arr = np.zeros(geometry.shape, dtype=np.float64)
     arr[2, 2, 2] = 10.0
-    return DummyImage(arr)
+    return make_image(geometry, arr)
 
 
 @pytest.fixture
 def emission_random(geometry):
     rng = np.random.default_rng(42)
-    arr = rng.normal(size=geometry.shape)
-    return DummyImage(arr)
+    return make_image(geometry, rng.normal(size=geometry.shape))
 
 
 @pytest.fixture
 def anatomical_image_gradient(geometry):
-    img = geometry.allocate(0.0)
     grad = np.indices(geometry.shape).sum(axis=0)
-    img.fill(grad)
-    return img
+    return make_image(geometry, grad)
 
 
 @pytest.fixture
@@ -136,13 +111,13 @@ def test_adjoint_dot_product_float64_data_with_float32_anatomy(geometry, backend
         use_mask=True,
         mask_k=10,
     )
-    anatomy_f32 = geometry.allocate(0.0)
+    anatomy_f32 = make_geometry(geometry.shape, dtype=np.float32).allocate()
     anatomy_f32.fill(np.random.default_rng(3).normal(size=geometry.shape).astype(np.float32))
     operator.set_anatomical_image(anatomy_f32)
 
     rng = np.random.default_rng(5)
-    x = DummyImage(rng.normal(size=geometry.shape))  # float64
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))  # float64
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     forward = operator.direct(x).as_array()
     assert forward.dtype == np.float64
@@ -150,6 +125,43 @@ def test_adjoint_dot_product_float64_data_with_float32_anatomy(geometry, backend
     dot_forward = float(np.sum(forward * y.as_array()))
     dot_adjoint = float(np.sum(x.as_array() * operator.adjoint(y).as_array()))
     assert np.isclose(dot_forward, dot_adjoint, atol=1e-10, rtol=1e-8)
+
+
+@pytest.mark.parametrize("anat_dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("input_dtype", [np.float32, np.float64])
+def test_input_dtype_preserved(geometry, anat_dtype, input_dtype):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        normalize_kernel=True,
+        normalize_features=False,
+        use_mask=False,
+    )
+    anatomy = make_geometry(geometry.shape, dtype=anat_dtype).allocate()
+    anatomy.fill(np.random.default_rng(1).normal(size=geometry.shape).astype(anat_dtype))
+    operator.set_anatomical_image(anatomy)
+
+    input_geometry = make_geometry(geometry.shape, dtype=input_dtype)
+    x = input_geometry.allocate()
+    x.fill(np.random.default_rng(2).normal(size=geometry.shape).astype(input_dtype))
+
+    result = operator.direct(x)
+    assert result.dtype == input_dtype
+
+    out = input_geometry.allocate()
+    returned = operator.direct(x, out=out)
+    assert returned is out
+    assert out.dtype == input_dtype
+
+    adjoint_result = operator.adjoint(x)
+    assert adjoint_result.dtype == input_dtype
+
+    adjoint_out = input_geometry.allocate()
+    returned = operator.adjoint(x, out=adjoint_out)
+    assert returned is adjoint_out
+    assert adjoint_out.dtype == input_dtype
 
 
 @pytest.mark.parametrize("backend", available_backends())
@@ -164,14 +176,12 @@ def test_adjoint_dot_product(geometry, backend):
         use_mask=False,
         hybrid=False,
     )
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     rng = np.random.default_rng(7)
-    x = DummyImage(rng.normal(size=geometry.shape))
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     forward = operator.direct(x).as_array()
     adjoint = operator.adjoint(y).as_array()
@@ -179,6 +189,145 @@ def test_adjoint_dot_product(geometry, backend):
     dot_forward = float(np.sum(forward * y.as_array()))
     dot_adjoint = float(np.sum(x.as_array() * adjoint))
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
+
+
+@pytest.mark.parametrize("use_mask", [False, True])
+@pytest.mark.parametrize("normalize_kernel", [False, True])
+def test_forward_adjoint_dot_dense_sparse(geometry, use_mask, normalize_kernel):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        sigma_dist=1.0,
+        normalize_kernel=normalize_kernel,
+        use_mask=use_mask,
+        mask_k=10 if use_mask else None,
+        distance_weighting=True,
+        hybrid=False,
+    )
+    grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
+    operator.set_anatomical_image(make_image(geometry, grid))
+
+    rng = np.random.default_rng(11)
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
+
+    forward = operator.direct(x).as_array()
+    adjoint = operator.adjoint(y).as_array()
+
+    dot_forward = float(np.sum(forward * y.as_array()))
+    dot_adjoint = float(np.sum(x.as_array() * adjoint))
+    assert np.isclose(dot_forward, dot_adjoint, atol=1e-10, rtol=1e-8)
+
+
+def test_fresh_fixed_kernel_adjoint_matches_direct_initialised(geometry):
+    kwargs = dict(
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        normalize_kernel=True,
+        normalize_features=False,
+        use_mask=True,
+        mask_k=10,
+        hybrid=False,
+    )
+    grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
+    anat = make_image(geometry, grid)
+    rng = np.random.default_rng(13)
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
+
+    fresh = get_kernel_operator(geometry, **kwargs)
+    fresh.set_anatomical_image(anat)
+    adjoint_fresh = fresh.adjoint(y).as_array()
+
+    initialised = get_kernel_operator(geometry, **kwargs)
+    initialised.set_anatomical_image(anat)
+    initialised.direct(x)
+    adjoint_direct = initialised.adjoint(y).as_array()
+
+    assert np.allclose(adjoint_fresh, adjoint_direct, atol=1e-12, rtol=1e-10)
+
+
+def test_adaptive_hybrid_adjoint_without_reference_raises(geometry):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        sigma_emission=0.5,
+        normalize_kernel=True,
+        use_mask=False,
+        hybrid=True,
+    )
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(RuntimeError, match="emission reference"):
+        operator.adjoint(geometry.allocate(1.0))
+
+
+def test_setters_invalidate_derived_caches(geometry):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        normalize_kernel=True,
+        use_mask=True,
+        mask_k=10,
+    )
+    operator.set_anatomical_image(make_image(geometry, np.indices(geometry.shape).sum(axis=0)))
+    operator.direct(geometry.allocate(1.0))
+
+    assert operator.mask is not None
+    assert operator._anatomical_weights is not None
+    assert operator._normalisation_map is not None
+    operator.set_norm(1.0)
+
+    operator.set_parameters({"sigma_anat": 0.9})
+    assert operator.mask is None
+    assert operator._anatomical_weights is None
+    assert operator._normalisation_map is None
+    assert operator._norm is None
+
+    operator.direct(geometry.allocate(1.0))
+    operator.set_norm(1.0)
+    operator.set_anatomical_image(make_image(geometry, np.ones(geometry.shape)))
+    assert operator.mask is None
+    assert operator._anatomical_weights is None
+    assert operator._normalisation_map is None
+    assert operator._norm is None
+
+
+def test_recalc_mask_rebuilds_mask(geometry, monkeypatch):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        normalize_kernel=False,
+        use_mask=True,
+        mask_k=5,
+        recalc_mask=True,
+    )
+    operator.set_anatomical_image(make_image(geometry, np.indices(geometry.shape).sum(axis=0)))
+
+    calls = []
+    original = operator.precompute_mask
+
+    def counting_precompute_mask():
+        calls.append(1)
+        return original()
+
+    monkeypatch.setattr(operator, "precompute_mask", counting_precompute_mask)
+
+    emission = geometry.allocate(1.0)
+    operator.direct(emission)
+    operator.direct(emission)
+
+    assert len(calls) == 2
+
 
 @pytest.mark.parametrize("backend", available_backends())
 def test_hybrid_adjoint_dot_product(geometry, backend):
@@ -192,14 +341,12 @@ def test_hybrid_adjoint_dot_product(geometry, backend):
         use_mask=False,
         hybrid=True,
     )
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     rng = np.random.default_rng(7)
-    x = DummyImage(rng.normal(size=geometry.shape))
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     forward = operator.direct(x).as_array()
     adjoint = operator.adjoint(y).as_array()
@@ -207,6 +354,7 @@ def test_hybrid_adjoint_dot_product(geometry, backend):
     dot_forward = float(np.sum(forward * y.as_array()))
     dot_adjoint = float(np.sum(x.as_array() * adjoint))
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
+
 
 @pytest.mark.parametrize("backend", available_backends())
 def test_hybrid_adjoint_mormalized_dot_product(geometry, backend):
@@ -220,14 +368,12 @@ def test_hybrid_adjoint_mormalized_dot_product(geometry, backend):
         use_mask=False,
         hybrid=True,
     )
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     rng = np.random.default_rng(7)
-    x = DummyImage(rng.normal(size=geometry.shape))
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     forward = operator.direct(x).as_array()
     adjoint = operator.adjoint(y).as_array()
@@ -236,12 +382,13 @@ def test_hybrid_adjoint_mormalized_dot_product(geometry, backend):
     dot_adjoint = float(np.sum(x.as_array() * adjoint))
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
 
+
 def test_mask_available_with_numba(geometry):
     operator = KernelOperator(geometry, use_mask=True, mask_k=3)
     operator.set_anatomical_image(geometry.allocate(0.0))
 
     result = operator.direct(geometry.allocate(1.0))
-    assert isinstance(result, DummyImage)
+    assert isinstance(result, type(geometry.allocate()))
     assert operator.mask is not None
     # With sparse indexing, mask shape is (..., k) not (..., n³)
     assert operator.mask.shape[-1] == operator.parameters["mask_k"]
@@ -341,10 +488,7 @@ def test_normalize_features_scales_anatomical_image(geometry, backend):
     # create a strongly varying anatomical image
     coords = np.indices(geometry.shape).astype(np.float64)
     anat_arr = (coords[0] * 5.0) + (coords[1] * 2.0) + coords[2]
-    anat = geometry.allocate(0.0)
-    anat.fill(anat_arr)
-
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
     stored = operator.anatomical_image.as_array()
 
     std = anat_arr.std()
@@ -355,12 +499,10 @@ def test_normalize_features_scales_anatomical_image(geometry, backend):
 
 @pytest.mark.parametrize("backend", available_backends())
 def test_distance_weighting_emphasises_near_voxels(geometry, backend):
-    spike = geometry.allocate(0.0)
     center = tuple(idx // 2 for idx in geometry.shape)
-    spike_arr = spike.as_array()
-    spike_arr.fill(0.0)
+    spike_arr = np.zeros(geometry.shape, dtype=np.float64)
     spike_arr[center] = 1.0
-    spike.fill(spike_arr)
+    spike = make_image(geometry, spike_arr)
 
     anat = geometry.allocate(1.0)
 
@@ -401,15 +543,13 @@ def test_mask_k_picks_most_similar_neighbours(geometry, backend):
     )
 
     # Assign unique intensities so absolute differences are unique
-    anat = geometry.allocate(0.0)
     anat_arr = np.zeros(geometry.shape, dtype=np.float64)
     for i in range(geometry.shape[0]):
         for j in range(geometry.shape[1]):
             for k in range(geometry.shape[2]):
                 anat_arr[i, j, k] = i * 100.0 + j * 10.0 + k
-    anat.fill(anat_arr)
 
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
     operator.direct(geometry.allocate(1.0))
     mask = operator.mask
     assert mask is not None
@@ -570,13 +710,11 @@ def test_adjoint_with_all_features(geometry, backend):
     # Anatomical image with wide dynamic range
     coords = np.indices(geometry.shape).astype(np.float64)
     anat_arr = coords[0] * 3.0 + coords[1] ** 2 * 0.1 + np.sin(coords[2])
-    anat = geometry.allocate(0.0)
-    anat.fill(anat_arr)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
 
     rng = np.random.default_rng(21)
-    x = DummyImage(rng.normal(size=geometry.shape))
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     forward = operator.direct(x).as_array()
     adjoint = operator.adjoint(y).as_array()
@@ -599,10 +737,8 @@ def test_precompute_anatomical_weights(geometry, backend):
         distance_weighting=True,
     )
 
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     # Before any operation, weights should be None
     assert operator._anatomical_weights is None
@@ -674,10 +810,8 @@ def test_precomputed_weights_with_mask(geometry, backend):
     )
 
     # Use gradient anatomical image
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     # Pre-compute weights
     weights = operator.precompute_anatomical_weights()
@@ -718,9 +852,7 @@ def test_adjoint_with_precomputed_anatomical_weights(geometry, backend):
     # Anatomical image with wide dynamic range
     coords = np.indices(geometry.shape).astype(np.float64)
     anat_arr = coords[0] * 3.0 + coords[1] ** 2 * 0.1 + np.sin(coords[2])
-    anat = geometry.allocate(0.0)
-    anat.fill(anat_arr)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
 
     # Explicitly pre-compute anatomical weights
     weights = operator.precompute_anatomical_weights()
@@ -728,8 +860,8 @@ def test_adjoint_with_precomputed_anatomical_weights(geometry, backend):
     assert operator._anatomical_weights is None  # Not cached yet until first use
 
     rng = np.random.default_rng(21)
-    x = DummyImage(rng.normal(size=geometry.shape))
-    y = DummyImage(rng.normal(size=geometry.shape))
+    x = make_image(geometry, rng.normal(size=geometry.shape))
+    y = make_image(geometry, rng.normal(size=geometry.shape))
 
     # Run forward and adjoint (this will trigger caching)
     forward = operator.direct(x).as_array()
@@ -768,14 +900,12 @@ def test_precomputed_weights_consistency(geometry, backend, use_mask, hybrid, di
     )
 
     # Set anatomical image
-    anat = geometry.allocate(0.0)
     grid = np.indices(geometry.shape).sum(axis=0) / math.prod(geometry.shape)
-    anat.fill(grid)
-    operator.set_anatomical_image(anat)
+    operator.set_anatomical_image(make_image(geometry, grid))
 
     # Create test emission data
     rng = np.random.default_rng(42)
-    emission = DummyImage(rng.normal(size=geometry.shape))
+    emission = make_image(geometry, rng.normal(size=geometry.shape))
 
     # First call - weights will be computed and cached
     result1 = operator.direct(emission).as_array()
@@ -788,19 +918,197 @@ def test_precomputed_weights_consistency(geometry, backend, use_mask, hybrid, di
     assert np.allclose(result1, result2, atol=1e-14, rtol=1e-14)
 
 
-def test_kernel_operator_rejects_even_neighbourhood(geometry):
-    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
-        get_kernel_operator(geometry, backend="numba", num_neighbours=4)
+@pytest.mark.parametrize("num_neighbours", [0, -1, 2, 4, 3.5, True])
+def test_invalid_num_neighbours_rejected(geometry, num_neighbours):
+    operator = get_kernel_operator(geometry, backend="numba", num_neighbours=num_neighbours)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="num_neighbours"):
+        operator.direct(geometry.allocate(1.0))
 
 
-def test_kernel_operator_rejects_zero_or_negative_neighbourhood(geometry):
-    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
-        get_kernel_operator(geometry, backend="numba", num_neighbours=0)
-    with pytest.raises(ValueError, match="num_neighbours must be a positive odd integer"):
-        get_kernel_operator(geometry, backend="numba", num_neighbours=-3)
+def test_missing_anatomical_image_rejected(geometry):
+    operator = get_kernel_operator(geometry, backend="numba")
+
+    with pytest.raises(ValueError, match="anatomical image"):
+        operator.direct(geometry.allocate(1.0))
 
 
-def test_kernel_operator_rejects_negative_sigma(geometry):
-    for param in ("sigma_anat", "sigma_dist", "sigma_emission"):
-        with pytest.raises(ValueError, match=f"{param} must be non-negative"):
-            get_kernel_operator(geometry, backend="numba", **{param: -0.5})
+def test_shape_mismatched_anatomical_image_rejected(geometry):
+    operator = get_kernel_operator(geometry, backend="numba")
+    operator.set_anatomical_image(make_geometry((3, 3, 3)).allocate(1.0))
+
+    with pytest.raises(ValueError, match="shape"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_non_3d_input_rejected(geometry):
+    operator = get_kernel_operator(geometry, backend="numba")
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="3-D"):
+        operator.direct(np.zeros((5, 5)))
+
+
+def test_multichannel_2d_geometry_rejected():
+    """A 2-D geometry with channels allocates (channels, y, x); ndim==3 alone
+    must not let it be treated as a single-channel 3-D volume."""
+    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, channels=2)
+    operator = get_kernel_operator(geometry, backend="numba", num_neighbours=3)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="single-channel 3-D"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_reflection_radius_larger_than_volume_rejected():
+    small_geometry = make_geometry((3, 3, 3))
+    operator = get_kernel_operator(small_geometry, backend="numba", num_neighbours=9)
+    operator.set_anatomical_image(small_geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="reflection radius"):
+        operator.direct(small_geometry.allocate(1.0))
+
+
+@pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf])
+def test_invalid_sigma_anat_rejected(geometry, sigma):
+    operator = get_kernel_operator(geometry, backend="numba", sigma_anat=sigma)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_anat"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_invalid_sigma_emission_rejected(geometry):
+    operator = get_kernel_operator(geometry, backend="numba", sigma_emission=0.0, hybrid=True)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_emission"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_invalid_sigma_dist_rejected(geometry):
+    operator = get_kernel_operator(geometry, backend="numba", sigma_dist=0.0, distance_weighting=True)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_dist"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_validation_fails_before_compiled_kernel(geometry, monkeypatch):
+    import krl.operators.kernel_operator as kernel_module
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("compiled kernel was entered")
+
+    monkeypatch.setattr(kernel_module, "_nb_kernel_precomputed", fail_if_called)
+
+    operator = get_kernel_operator(geometry, backend="numba", num_neighbours=4)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="num_neighbours"):
+        operator.direct(geometry.allocate(1.0))
+
+
+@pytest.mark.parametrize("num_neighbours", [0, 4, 3.5, True])
+def test_precompute_helpers_reject_invalid_neighbourhood(geometry, num_neighbours):
+    operator = get_kernel_operator(geometry, backend="numba", num_neighbours=num_neighbours)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="num_neighbours"):
+        operator.precompute_mask()
+    with pytest.raises(ValueError, match="num_neighbours"):
+        operator.precompute_anatomical_weights()
+
+
+def test_precompute_helpers_require_anatomical_image(geometry):
+    operator = get_kernel_operator(geometry, backend="numba")
+
+    with pytest.raises(ValueError, match="anatomical image"):
+        operator.precompute_mask()
+    with pytest.raises(ValueError, match="anatomical image"):
+        operator.precompute_anatomical_weights()
+
+
+def test_precompute_helpers_reject_shape_mismatch(geometry):
+    operator = get_kernel_operator(geometry, backend="numba")
+    operator.set_anatomical_image(make_geometry((3, 3, 3)).allocate(1.0))
+
+    with pytest.raises(ValueError, match="shape"):
+        operator.precompute_mask()
+    with pytest.raises(ValueError, match="shape"):
+        operator.precompute_anatomical_weights()
+
+
+def test_precompute_helpers_reject_oversized_neighbourhood():
+    small_geometry = make_geometry((3, 3, 3))
+    operator = get_kernel_operator(small_geometry, backend="numba", num_neighbours=9)
+    operator.set_anatomical_image(small_geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="reflection radius"):
+        operator.precompute_mask()
+    with pytest.raises(ValueError, match="reflection radius"):
+        operator.precompute_anatomical_weights()
+
+
+@pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan])
+def test_precompute_weights_reject_invalid_sigma(geometry, sigma):
+    operator = get_kernel_operator(geometry, backend="numba", sigma_anat=sigma)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_anat"):
+        operator.precompute_anatomical_weights()
+
+
+@pytest.mark.parametrize("use_mask", [True, False])
+def test_precompute_validation_fails_before_jit(geometry, monkeypatch, use_mask):
+    import krl.operators.kernel_operator as kernel_module
+
+    entered = []
+
+    def fail_if_called(*args, **kwargs):
+        entered.append(True)
+        raise AssertionError("compiled kernel was entered")
+
+    monkeypatch.setattr(kernel_module, "_nb_precompute_mask", fail_if_called)
+    monkeypatch.setattr(kernel_module, "_nb_precompute_anatomical_weights", fail_if_called)
+    monkeypatch.setattr(kernel_module, "_nb_precompute_anatomical_weights_mask", fail_if_called)
+
+    invalid_neighbourhood = get_kernel_operator(
+        geometry, backend="numba", num_neighbours=4, use_mask=use_mask
+    )
+    invalid_neighbourhood.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="num_neighbours"):
+        invalid_neighbourhood.precompute_mask()
+    with pytest.raises(ValueError, match="num_neighbours"):
+        invalid_neighbourhood.precompute_anatomical_weights()
+    assert entered == []
+
+    invalid_sigma = get_kernel_operator(
+        geometry, backend="numba", sigma_anat=0.0, use_mask=use_mask
+    )
+    invalid_sigma.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_anat"):
+        invalid_sigma.precompute_anatomical_weights()
+    assert entered == []
+
+
+def test_directional_operator_scaled_out(geometry):
+    component_a = make_image(geometry, np.random.default_rng(0).normal(size=geometry.shape))
+    component_b = make_image(geometry, np.random.default_rng(1).normal(size=geometry.shape))
+    anatomical_gradient = BlockDataContainer(component_a, component_b)
+
+    operator = DirectionalOperator(anatomical_gradient, gamma=0.3, eta=0.1)
+    scaled = ScaledOperator(operator, 2.0)
+
+    x = BlockDataContainer(component_a.clone(), component_b.clone())
+    out = x.clone()
+    returned = scaled.direct(x, out=out)
+
+    assert returned is out
+
+    expected = scaled.direct(x)
+    for result, reference in zip(out.containers, expected.containers):
+        assert np.allclose(result.as_array(), reference.as_array())

@@ -22,6 +22,8 @@ jobs:
           path: dist/
 
   publish:
+    # PyPI publishing is opt-in via the PUBLISH_TO_PYPI repository variable (unset/false = not published)
+    if: vars.PUBLISH_TO_PYPI == 'true'
     needs: build
     runs-on: ubuntu-latest
     environment: pypi

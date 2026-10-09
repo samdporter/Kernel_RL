@@ -4,16 +4,22 @@ message: >-
   If you use this software, please cite it using the
   metadata from this file.
 type: software
+version: 0.3.0
+date-released: 2026-10-09
 authors:
   - family-names: Erlandsson
     given-names: Kjell
-    email: kjell.erlandsson@kcl.ac.uk
-    affiliation: King's College London
+    email: k.erlandsson@ucl.ac.uk
+    affiliation: University College London
+  - family-names: Porter
+    given-names: Sam
+    email: sam.porter.18@ucl.ac.uk
+    affiliation: University College London
 identifiers:
   - description: This software
     type: url
-    value: https://github.com/KCL-BMEIS/KRL
-repository-code: "https://github.com/KCL-BMEIS/KRL"
+    value: https://github.com/samdporter/Kernel_RL
+repository-code: "https://github.com/samdporter/Kernel_RL"
 abstract: >-
   A CIL plugin implementing anatomically-guided (kernelised)
   Richardson-Lucy deconvolution for PET imaging, with CPU and GPU

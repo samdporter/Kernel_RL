@@ -1,81 +1,77 @@
-"""Tests for MAPRL preconditioner functionality."""
-import importlib
+"""Tests for MAPRL preconditioner and Armijo scheduling functionality."""
 
 import numpy as np
 import pytest
+from cil.framework import ImageGeometry
+
+from krl.algorithms.maprl import MAPRL
+
+
+def make_image(geometry, value):
+    image = geometry.allocate(0.0, dtype=np.float64)
+    image.fill(value)
+    return image
 
 
 @pytest.fixture
-def maprl_module():
-    module = importlib.import_module("src.krl.algorithms.maprl")
-    return importlib.reload(module)
+def geometry():
+    return ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=1, dtype=np.float64)
 
 
-class DummyImage:
-    """Minimal ImageData-like class for testing."""
-    def __init__(self, data):
-        self.data = np.array(data, dtype=np.float64)
+class ConstantFunctional:
+    """Simple functional with a constant gradient and constant value."""
 
-    def clone(self):
-        return DummyImage(self.data.copy())
-
-    def as_array(self):
-        return self.data
-
-    def fill(self, value):
-        if np.isscalar(value):
-            self.data.fill(value)
-        else:
-            self.data = np.array(value, dtype=np.float64)
-
-    def maximum(self, value, out=None):
-        result = np.maximum(self.data, value)
-        if out is None:
-            return DummyImage(result)
-        out.data = result
-        return out
-
-    def __add__(self, other):
-        return DummyImage(self.data + (other.data if hasattr(other, 'data') else other))
-
-    def __sub__(self, other):
-        return DummyImage(self.data - (other.data if hasattr(other, 'data') else other))
-
-    def __mul__(self, other):
-        return DummyImage(self.data * (other.data if hasattr(other, 'data') else other))
-
-    def __truediv__(self, other):
-        return DummyImage(self.data / (other.data if hasattr(other, 'data') else other))
-
-
-class DummyFunctional:
-    """Minimal Function-like class for testing."""
-    def __init__(self, grad_value=0.1):
-        self.grad_value = grad_value
+    def __init__(self, gradient, value=0.0):
+        self._gradient = gradient
+        self._value = value
 
     def gradient(self, x):
-        return DummyImage(np.ones_like(x.as_array()) * self.grad_value)
+        image = x.geometry.allocate(0.0, dtype=np.float64)
+        image.fill(self._gradient)
+        return image
 
     def __call__(self, x):
-        return float(np.sum(x.as_array()**2))
+        return float(self._value)
 
 
-def test_maprl_preconditioner_initialization(maprl_module):
-    """Test that MAPRL can be initialized with preconditioner parameters."""
-    initial = DummyImage(np.ones((5, 5)))
-    data_fid = DummyFunctional()
-    prior = DummyFunctional()
+class RecordingMAPRL(MAPRL):
+    """MAPRL that records every preconditioner refresh via actual update count."""
 
-    def test_preconditioner(x):
-        return DummyImage(np.ones_like(x.as_array()) * 0.5)
+    def __init__(self, *args, **kwargs):
+        self.__dict__["preconditioner_updates"] = []
+        super().__init__(*args, **kwargs)
 
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
+    @property
+    def _preconditioner_image(self):
+        return self.__dict__.get("_preconditioner_store")
+
+    @_preconditioner_image.setter
+    def _preconditioner_image(self, value):
+        self.__dict__["_preconditioner_store"] = value
+        if value is not None:
+            self.__dict__["preconditioner_updates"].append(self._update_count)
+
+
+def make_maprl(geometry, **kwargs):
+    defaults = dict(
+        initial_estimate=make_image(geometry, 1.0),
+        data_fidelity=ConstantFunctional(0.1, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
         step_size=1.0,
         initial_line_search=False,
         armijo_iterations=0,
+    )
+    defaults.update(kwargs)
+    return MAPRL(**defaults)
+
+
+def test_maprl_preconditioner_initialization(geometry):
+    """Test that MAPRL can be initialized with preconditioner parameters."""
+    def test_preconditioner(x):
+        return make_image(x.geometry, 0.5)
+
+    maprl = make_maprl(
+        geometry,
         preconditioner=test_preconditioner,
         preconditioner_update_initial=5,
         preconditioner_update_interval=10,
@@ -88,218 +84,181 @@ def test_maprl_preconditioner_initialization(maprl_module):
     assert maprl._preconditioner_image is None  # Not computed yet
 
 
-def test_maprl_preconditioner_update_initial_iterations(maprl_module):
-    """Test that preconditioner is updated every iteration for first N iterations."""
-    initial = DummyImage(np.ones((5, 5)))
-    data_fid = DummyFunctional(grad_value=0.1)
-    prior = DummyFunctional(grad_value=0.05)
-
-    update_count = []
+def test_maprl_preconditioner_update_initial_iterations(geometry):
+    """The preconditioner is refreshed on the first N actual updates."""
+    calls = []
+    holder = {}
 
     def test_preconditioner(x):
-        update_count.append(True)
-        return DummyImage(np.ones_like(x.as_array()) * 0.5)
+        calls.append(holder["algorithm"]._update_count)
+        return make_image(x.geometry, 0.5)
 
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
-        step_size=1.0,
-        initial_line_search=False,
-        armijo_iterations=0,
+    maprl = make_maprl(
+        geometry,
         preconditioner=test_preconditioner,
         preconditioner_update_initial=3,
         preconditioner_update_interval=10,
     )
+    holder["algorithm"] = maprl
+    maprl.run(iterations=5, verbose=0)
 
-    # Run first 5 iterations
-    for i in range(1, 6):
-        maprl.iteration = i
-        maprl.update()
-
-    # Should update on iterations 1, 2, 3 (initial period)
-    # Then not on 4, 5
-    assert len(update_count) == 3
+    assert maprl._update_count == 5
+    assert calls == [1, 2, 3]
 
 
-def test_maprl_preconditioner_update_periodic(maprl_module):
-    """Test that preconditioner updates periodically after initial iterations."""
-    initial = DummyImage(np.ones((5, 5)))
-    data_fid = DummyFunctional(grad_value=0.1)
-    prior = DummyFunctional(grad_value=0.05)
-
-    update_iterations = []
+def test_maprl_preconditioner_update_periodic(geometry):
+    """The preconditioner is refreshed periodically after the initial window."""
+    calls = []
+    holder = {}
 
     def test_preconditioner(x):
-        update_iterations.append(maprl.iteration)
-        return DummyImage(np.ones_like(x.as_array()) * 0.5)
+        calls.append(holder["algorithm"]._update_count)
+        return make_image(x.geometry, 0.5)
 
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
-        step_size=1.0,
-        initial_line_search=False,
-        armijo_iterations=0,
+    maprl = make_maprl(
+        geometry,
         preconditioner=test_preconditioner,
         preconditioner_update_initial=2,
         preconditioner_update_interval=5,
     )
+    holder["algorithm"] = maprl
+    maprl.run(iterations=15, verbose=0)
 
-    # Run 15 iterations
-    for i in range(1, 16):
-        maprl.iteration = i
-        maprl.update()
-
-    # Should update on: 1, 2 (initial), then 5, 10, 15 (periodic)
-    expected = [1, 2, 5, 10, 15]
-    assert update_iterations == expected
+    assert calls == [1, 2, 5, 10, 15]
 
 
-def test_maprl_preconditioner_application(maprl_module):
-    """Test that preconditioner is applied correctly in the update step."""
-    initial = DummyImage(np.ones((3, 3)))
-    data_fid = DummyFunctional(grad_value=1.0)
-    prior = DummyFunctional(grad_value=0.0)
+def test_maprl_preconditioner_zero_interval_only_initialises(geometry):
+    """A zero interval disables periodic refresh but still initialises on first use."""
+    calls = []
+    holder = {}
 
-    # Preconditioner value (should multiply gradient)
     def test_preconditioner(x):
-        return DummyImage(np.ones_like(x.as_array()) * 2.0)
+        calls.append(holder["algorithm"]._update_count)
+        return make_image(x.geometry, 0.5)
 
-    eps = 1e-8
-    relaxation_eta = 0.01
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
-        step_size=0.1,
-        eps=eps,
-        relaxation_eta=relaxation_eta,
+    maprl = make_maprl(
+        geometry,
+        preconditioner=test_preconditioner,
+        preconditioner_update_initial=0,
+        preconditioner_update_interval=0,
+    )
+    holder["algorithm"] = maprl
+    maprl.run(iterations=6, verbose=0)
+
+    assert calls == [1]
+    assert maprl._preconditioner_image is not None
+
+
+def test_maprl_static_preconditioner_schedule(geometry):
+    """A static preconditioner is applied on the same schedule as a callable one."""
+    static_preconditioner = make_image(geometry, 2.0)
+    maprl = RecordingMAPRL(
+        initial_estimate=make_image(geometry, 1.0),
+        data_fidelity=ConstantFunctional(0.1, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
+        step_size=1.0,
         initial_line_search=False,
         armijo_iterations=0,
-        preconditioner=test_preconditioner,
+        preconditioner=static_preconditioner,
+        preconditioner_update_initial=2,
+        preconditioner_update_interval=5,
+    )
+
+    maprl.run(iterations=12, verbose=0)
+
+    assert maprl.preconditioner_updates == [1, 2, 5, 10]
+    assert maprl._preconditioner_image is static_preconditioner
+
+
+def test_maprl_preconditioner_application(geometry):
+    """The preconditioner multiplies the gradient in the update step."""
+    maprl = make_maprl(
+        geometry,
+        data_fidelity=ConstantFunctional(1.0, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
+        step_size=0.1,
+        eps=1e-8,
+        relaxation_eta=0.01,
+        preconditioner=lambda x: make_image(x.geometry, 2.0),
         preconditioner_update_initial=1,
     )
 
-    # Perform one update
-    maprl.iteration = 1
     initial_values = maprl.x.as_array().copy()
-    maprl.update()
-    updated_values = maprl.x.as_array()
+    maprl.run(iterations=1, verbose=0)
 
-    # New formula: x = x - grad * precond * step
-    # With preconditioner = 2.0, gradient = 1.0
-    # step_size at iteration 1 = 0.1 / (1 + 0.01 * 1)
-    step_actual = 0.1 / (1 + relaxation_eta * 1)
+    step_actual = 0.1 / (1 + 0.01 * 1)
     expected = initial_values - 1.0 * 2.0 * step_actual
-    expected = np.maximum(expected, 0.0)  # Non-negativity constraint
+    expected = np.maximum(expected, 0.0)
 
-    assert np.allclose(updated_values, expected, rtol=1e-5)
+    assert np.allclose(maprl.x.as_array(), expected, rtol=1e-5)
 
 
-def test_maprl_without_preconditioner(maprl_module):
-    """Test that MAPRL works correctly without preconditioner."""
-    initial = DummyImage(np.ones((3, 3)))
-    data_fid = DummyFunctional(grad_value=0.5)
-    prior = DummyFunctional(grad_value=0.0)
-
-    eps = 1e-8
-    relaxation_eta = 0.01
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
+def test_maprl_without_preconditioner(geometry):
+    """MAPRL works correctly without a preconditioner."""
+    maprl = make_maprl(
+        geometry,
+        data_fidelity=ConstantFunctional(0.5, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
         step_size=0.1,
-        eps=eps,
-        relaxation_eta=relaxation_eta,
-        initial_line_search=False,
-        armijo_iterations=0,
+        eps=1e-8,
+        relaxation_eta=0.01,
         preconditioner=None,
     )
 
-    # Perform one update
-    maprl.iteration = 1
     initial_values = maprl.x.as_array().copy()
-    maprl.update()
-    updated_values = maprl.x.as_array()
+    maprl.run(iterations=1, verbose=0)
 
-    # Without preconditioner: x = x - (x + eps) * grad * step
-    # step_size at iteration 1 = 0.1 / (1 + 0.01 * 1)
-    step_actual = 0.1 / (1 + relaxation_eta * 1)
-    expected = initial_values - (initial_values + eps) * 0.5 * step_actual
+    step_actual = 0.1 / (1 + 0.01 * 1)
+    expected = initial_values - (initial_values + 1e-8) * 0.5 * step_actual
     expected = np.maximum(expected, 0.0)
 
-    assert np.allclose(updated_values, expected, rtol=1e-5)
+    assert np.allclose(maprl.x.as_array(), expected, rtol=1e-5)
 
 
-def test_maprl_preconditioner_static_image(maprl_module):
-    """Test that MAPRL works with a static ImageData preconditioner."""
-    initial = DummyImage(np.ones((3, 3)))
-    data_fid = DummyFunctional(grad_value=1.0)
-    prior = DummyFunctional(grad_value=0.0)
-
-    # Static preconditioner image
-    static_precond = DummyImage(np.ones((3, 3)) * 2.0)
-
-    eps = 1e-8
-    maprl = maprl_module.MAPRL(
-        initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
+def test_maprl_preconditioner_static_image(geometry):
+    """MAPRL works with a static ImageData preconditioner."""
+    static_preconditioner = make_image(geometry, 2.0)
+    maprl = make_maprl(
+        geometry,
+        data_fidelity=ConstantFunctional(1.0, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
         step_size=0.1,
-        eps=eps,
-        initial_line_search=False,
-        armijo_iterations=0,
-        preconditioner=static_precond,
+        eps=1e-8,
+        preconditioner=static_preconditioner,
     )
 
-    # Perform one update
-    maprl.iteration = 1
-    maprl.update()
+    maprl.run(iterations=1, verbose=0)
 
-    # Check that preconditioner was used
     assert maprl._preconditioner_image is not None
-    assert np.allclose(maprl._preconditioner_image.as_array(), static_precond.as_array())
+    assert np.allclose(maprl._preconditioner_image.as_array(), static_preconditioner.as_array())
 
 
-def test_parallel_sum_preconditioner(maprl_module):
-    """Test that the parallel-sum preconditioner works correctly."""
-    initial = DummyImage(np.array([[1.0, 2.0], [3.0, 4.0]]))
-    data_fid = DummyFunctional(grad_value=0.5)
-    prior = DummyFunctional(grad_value=0.0)
+def test_parallel_sum_preconditioner(geometry):
+    """The parallel-sum preconditioner is applied correctly."""
+    initial = make_image(geometry, 1.0)
+    initial.fill(np.array([[1.0, 2.0, 3.0, 4.0]] * 4))
 
-    # Create a preconditioner that represents the parallel sum of D=x and R=1/H
-    # For testing: D = x (data preconditioner), R = 0.5 (prior preconditioner)
-    # Parallel sum: P = (D * R) / (D + R)
     def parallel_preconditioner(x):
-        D = x.as_array()  # Data preconditioner
-        R = 0.5  # Prior preconditioner (constant for simplicity)
-        P = (D * R) / (D + R)
-        return DummyImage(P)
+        D = x.as_array()
+        R = 0.5
+        return make_image(x.geometry, (D * R) / (D + R))
 
-    eps = 1e-8
-    relaxation_eta = 0.0  # No relaxation for simpler testing
-    maprl = maprl_module.MAPRL(
+    maprl = MAPRL(
         initial_estimate=initial,
-        data_fidelity=data_fid,
-        prior=prior,
+        data_fidelity=ConstantFunctional(0.5, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
         step_size=0.1,
-        eps=eps,
-        relaxation_eta=relaxation_eta,
+        eps=1e-8,
+        relaxation_eta=0.0,
         initial_line_search=False,
         armijo_iterations=0,
         preconditioner=parallel_preconditioner,
         preconditioner_update_initial=1,
     )
 
-    # Perform one update
-    maprl.iteration = 1
-    initial_values = maprl.x.as_array().copy()
-    maprl.update()
-    updated_values = maprl.x.as_array()
+    initial_values = initial.as_array().copy()
+    maprl.run(iterations=1, verbose=0)
 
-    # Expected: x = x - grad * P * step
-    # P = max((D*R)/(D+R+eps), eps) where D=x, R=0.5
     D = initial_values
     R = 0.5
     P = (D * R) / (D + R + 1e-6)
@@ -307,204 +266,103 @@ def test_parallel_sum_preconditioner(maprl_module):
     expected = initial_values - 0.5 * P * 0.1
     expected = np.maximum(expected, 0.0)
 
-    assert np.allclose(updated_values, expected, rtol=1e-5)
+    assert np.allclose(maprl.x.as_array(), expected, rtol=1e-5)
 
 
-def _require_cil():
-    """Helper to skip tests if CIL is not available."""
-    try:
-        import cil.optimisation.functions as fn
-        import cil.optimisation.operators as op
-        from cil.framework import ImageGeometry
-        from cil.optimisation.operators import GradientOperator
-        return ImageGeometry, GradientOperator, fn, op
-    except ImportError as e:
-        pytest.skip(f"CIL not available: {e}")
+def test_maprl_armijo_update_periodic(geometry):
+    """Armijo line searches fire on the initial and periodic update schedule."""
+    armijo_updates = []
 
-
-def test_diagonal_hessian_monkey_patch():
-    """Test diagonal Hessian monkey-patching with actual CIL functions."""
-    ImageGeometry, GradientOperator, fn, op = _require_cil()
-    from krl.operators.directional import DirectionalOperator
-
-    # Create simple geometry and test image
-    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=1)
-    test_image = geometry.allocate('random', seed=42)
-
-    # Create directional operator
-    grad = GradientOperator(geometry, method='forward', bnd_cond='Neumann')
-    grad_ref = grad.direct(test_image)
-    d_op = DirectionalOperator(grad_ref)
-
-    # Create prior structure
-    alpha = 0.1
-    epsilon = test_image.max() * 1e-3
-    composition_op = op.CompositionOperator(d_op, grad)
-    prior = alpha * fn.OperatorCompositionFunction(
-        fn.SmoothMixedL21Norm(epsilon=epsilon), composition_op
-    )
-
-    # Monkey-patch as in run_deconv.py
-    smooth_l21_func = prior.function.function
-    composition_func = prior.function
-    epsilon_smooth = smooth_l21_func.epsilon
-
-    def smooth_l21_diag_hess(y):
-        norm_sq_arr = sum(c.as_array()**2 for c in y.containers)
-        denom = (norm_sq_arr + epsilon_smooth**2)**(1.5)
-        diag_arr = epsilon_smooth**2 / (denom + 1e-12)
-        result = y.containers[0].clone()
-        result.fill(diag_arr)
-        return result
-
-    def composition_diag_hess(x):
-        y = composition_func.operator.direct(x)
-        base_diag = smooth_l21_func.diagonal_hessian_approx(y)
-        return base_diag
-
-    def scaled_diag_hess(x):
-        return prior.scalar * prior.function.diagonal_hessian_approx(x)
-
-    smooth_l21_func.diagonal_hessian_approx = smooth_l21_diag_hess
-    composition_func.diagonal_hessian_approx = composition_diag_hess
-    prior.diagonal_hessian_approx = scaled_diag_hess
-
-    # Test calling the diagonal Hessian
-    diag_hess = prior.diagonal_hessian_approx(test_image)
-
-    # Check basic properties
-    assert diag_hess.shape == test_image.shape
-    assert np.all(np.isfinite(diag_hess.as_array()))
-    assert np.all(diag_hess.as_array() > 0)  # Should be positive
-
-    # Check scaling by alpha
-    assert diag_hess.max() > 0
-    # The diagonal Hessian should be scaled by alpha
-    unscaled_diag = prior.function.diagonal_hessian_approx(test_image)
-    assert np.allclose(diag_hess.as_array(), alpha * unscaled_diag.as_array())
-
-
-def test_maprl_armijo_update_periodic(maprl_module):
-    """Test that Armijo line search updates periodically after initial iterations."""
-    initial = DummyImage(np.ones((5, 5)))
-    data_fid = DummyFunctional(grad_value=0.1)
-    prior = DummyFunctional(grad_value=0.05)
-
-    armijo_iterations = []
-
-    # Store original _armijo_step to track when it's called
-    original_armijo_step = maprl_module.MAPRL._armijo_step
+    original_armijo_step = MAPRL._armijo_step
 
     def tracked_armijo_step(self, suggested_step):
-        armijo_iterations.append(self.iteration)
+        armijo_updates.append(self._update_count)
         return original_armijo_step(self, suggested_step)
 
-    maprl_module.MAPRL._armijo_step = tracked_armijo_step
+    MAPRL._armijo_step = tracked_armijo_step
 
     try:
-        maprl = maprl_module.MAPRL(
-            initial_estimate=initial,
-            data_fidelity=data_fid,
-            prior=prior,
+        maprl = make_maprl(
+            geometry,
             step_size=1.0,
-            initial_line_search=False,
             armijo_iterations=25,
             armijo_update_initial=3,
             armijo_update_interval=5,
         )
-
-        # Run 20 iterations
-        for i in range(1, 21):
-            maprl.iteration = i
-            maprl.update()
-
-        # Should update on: 1, 2, 3 (initial), then 5, 10, 15, 20 (periodic)
-        expected = [1, 2, 3, 5, 10, 15, 20]
-        assert armijo_iterations == expected, f"Expected {expected}, got {armijo_iterations}"
-
+        maprl.run(iterations=20, verbose=0)
     finally:
-        # Restore original method
-        maprl_module.MAPRL._armijo_step = original_armijo_step
+        MAPRL._armijo_step = original_armijo_step
+
+    assert armijo_updates == [1, 2, 3, 5, 10, 15, 20]
 
 
-def test_parallel_sum_with_cil_functions():
-    """Test the full parallel-sum preconditioner with CIL functions."""
-    ImageGeometry, GradientOperator, fn, op = _require_cil()
-    from krl.operators.directional import DirectionalOperator
+def test_maprl_armijo_zero_interval_disables_periodic(geometry):
+    """A zero Armijo interval keeps only the initial window."""
+    armijo_updates = []
 
-    # Create simple geometry and test image
-    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=1)
-    test_image = geometry.allocate('random', seed=42)
-    # Make sure it's positive
-    test_image.fill(np.abs(test_image.as_array()) + 0.1)
+    original_armijo_step = MAPRL._armijo_step
 
-    # Create directional operator
-    grad = GradientOperator(geometry, method='forward', bnd_cond='Neumann')
-    grad_ref = grad.direct(test_image)
-    d_op = DirectionalOperator(grad_ref)
+    def tracked_armijo_step(self, suggested_step):
+        armijo_updates.append(self._update_count)
+        return original_armijo_step(self, suggested_step)
 
-    # Create prior structure
-    alpha = 0.1
-    epsilon = test_image.max() * 1e-3
-    composition_op = op.CompositionOperator(d_op, grad)
-    prior = alpha * fn.OperatorCompositionFunction(
-        fn.SmoothMixedL21Norm(epsilon=epsilon), composition_op
-    )
+    MAPRL._armijo_step = tracked_armijo_step
 
-    # Monkey-patch as in run_deconv.py
-    smooth_l21_func = prior.function.function
-    composition_func = prior.function
-    epsilon_smooth = smooth_l21_func.epsilon
+    try:
+        maprl = make_maprl(
+            geometry,
+            step_size=1.0,
+            armijo_iterations=25,
+            armijo_update_initial=2,
+            armijo_update_interval=0,
+        )
+        maprl.run(iterations=10, verbose=0)
+    finally:
+        MAPRL._armijo_step = original_armijo_step
 
-    def smooth_l21_diag_hess(y):
-        norm_sq_arr = sum(c.as_array()**2 for c in y.containers)
-        denom = (norm_sq_arr + epsilon_smooth**2)**(1.5)
-        diag_arr = epsilon_smooth**2 / (denom + 1e-12)
-        result = y.containers[0].clone()
-        result.fill(diag_arr)
-        return result
+    assert armijo_updates == [1, 2]
 
-    def composition_diag_hess(x):
-        y = composition_func.operator.direct(x)
-        base_diag = smooth_l21_func.diagonal_hessian_approx(y)
-        return base_diag
 
-    def scaled_diag_hess(x):
-        return prior.scalar * prior.function.diagonal_hessian_approx(x)
+def test_maprl_schedules_resume_across_runs(geometry):
+    """Preconditioner and Armijo schedules keep counting across separate runs."""
+    preconditioner_calls = []
+    armijo_updates = []
+    holder = {}
 
-    smooth_l21_func.diagonal_hessian_approx = smooth_l21_diag_hess
-    composition_func.diagonal_hessian_approx = composition_diag_hess
-    prior.diagonal_hessian_approx = scaled_diag_hess
+    def test_preconditioner(x):
+        preconditioner_calls.append(holder["algorithm"]._update_count)
+        return make_image(x.geometry, 0.5)
 
-    # Create parallel-sum preconditioner as in run_deconv.py
-    def compute_preconditioner(x):
-        eps_safe = 1e-6
-        data_precond = x
-        prior_hess_diag = prior.diagonal_hessian_approx(x)
-        prior_precond = 1.0 / (prior_hess_diag + eps_safe)
-        precond = (data_precond * prior_precond) / (data_precond + prior_precond + eps_safe)
-        return precond
+    original_armijo_step = MAPRL._armijo_step
 
-    # Compute preconditioner
-    precond = compute_preconditioner(test_image)
+    def tracked_armijo_step(self, suggested_step):
+        armijo_updates.append(self._update_count)
+        return original_armijo_step(self, suggested_step)
 
-    # Verify properties
-    assert precond.shape == test_image.shape
-    assert np.all(np.isfinite(precond.as_array()))
-    assert np.all(precond.as_array() > 0)
+    MAPRL._armijo_step = tracked_armijo_step
 
-    # Verify parallel-sum property: P <= min(D, R)
-    D = test_image.as_array()
-    prior_hess = prior.diagonal_hessian_approx(test_image).as_array()
-    R = 1.0 / (prior_hess + 1e-6)
-    P = precond.as_array()
+    try:
+        maprl = make_maprl(
+            geometry,
+            step_size=1.0,
+            armijo_iterations=25,
+            armijo_update_initial=1,
+            armijo_update_interval=3,
+            preconditioner=test_preconditioner,
+            preconditioner_update_initial=1,
+            preconditioner_update_interval=3,
+        )
+        holder["algorithm"] = maprl
 
-    # Parallel sum should be less than or equal to both components
-    assert np.all(P <= D + 1e-5)
-    assert np.all(P <= R + 1e-5)
-    assert np.all(P >= 1e-6 - 1e-12)
+        maprl.run(iterations=2, verbose=0)
+        assert maprl._update_count == 2
+        assert preconditioner_calls == [1]
+        assert armijo_updates == [1]
 
-    # Verify formula with positivity floor: P = max((D*R)/(D+R), eps_safe)
-    expected_P = (D * R) / (D + R + 1e-6)
-    expected_P = np.maximum(expected_P, 1e-6)
-    assert np.allclose(P, expected_P, rtol=1e-4)
+        maprl.run(iterations=4, verbose=0)
+        assert maprl._update_count == 6
+        assert preconditioner_calls == [1, 3, 6]
+        assert armijo_updates == [1, 3, 6]
+    finally:
+        MAPRL._armijo_step = original_armijo_step
+

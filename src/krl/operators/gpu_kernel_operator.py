@@ -22,12 +22,9 @@ TORCH_AVAILABLE = False
 
 try:
     import torch
-    import torch.nn.functional as F
     TORCH_AVAILABLE = True
 except (ImportError, OSError, AttributeError):
-    # Create placeholder module-like objects for type checking
     torch = None  # type: ignore
-    F = None  # type: ignore
 
 from ..utils import get_array
 from .kernel_operator import BaseKernelOperator, KernelOperator
@@ -76,7 +73,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
         # Set device
         if device == 'auto':
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            self.device = torch.device(self._resolve_device())
         else:
             self.device = torch.device(device)
 
@@ -95,7 +92,6 @@ class TorchKernelOperator(BaseKernelOperator):
         self._mask_cpu = None
         self._normalisation_map_gpu = None
         self._normalisation_map_cpu = None
-        self._cpu_init_kwargs = cpu_kwargs
         self._cpu_operator = None
         self.max_gpu_batch_slices = max(1, int(max_gpu_batch_slices))
         if mask_chunk_limit_mb is None or mask_chunk_limit_mb <= 0:
@@ -115,8 +111,19 @@ class TorchKernelOperator(BaseKernelOperator):
             gpu_name = torch.cuda.get_device_name(self.device)
             gpu_mem_gb = torch.cuda.get_device_properties(self.device).total_memory / (1024**3)
             print(f"TorchKernelOperator: Using {gpu_name} ({gpu_mem_gb:.1f} GB)")
+        elif self.device.type == 'mps':
+            print("TorchKernelOperator: Using Apple MPS")
         else:
             print("TorchKernelOperator: Using CPU (GPU not available)")
+
+    @staticmethod
+    def _resolve_device():
+        if torch.cuda.is_available():
+            return 'cuda'
+        mps = getattr(torch.backends, 'mps', None)
+        if mps is not None and torch.backends.mps.is_available():
+            return 'mps'
+        return 'cpu'
 
     @staticmethod
     def _pad_reflect_inclusive(tensor, pad):
@@ -148,19 +155,23 @@ class TorchKernelOperator(BaseKernelOperator):
         )
         return reflected
 
+    def _clear_cached_state(self):
+        self._mask_gpu = None
+        self._mask_cpu = None
+        self._normalisation_map_gpu = None
+        self._normalisation_map_cpu = None
+
     def set_anatomical_image(self, image):
         """Override to clear GPU caches when anatomical image changes."""
         super().set_anatomical_image(image)
-        self._mask_gpu = None
-        self._mask_cpu = None
+        self._clear_cached_state()
         if self._cpu_operator is not None:
             self._cpu_operator.set_anatomical_image(image)
 
     def set_parameters(self, parameters):
         """Override to clear GPU caches when parameters change."""
         super().set_parameters(parameters)
-        self._mask_gpu = None
-        self._mask_cpu = None
+        self._clear_cached_state()
         if self._cpu_operator is not None:
             self._cpu_operator.set_parameters(parameters)
 
@@ -187,17 +198,15 @@ class TorchKernelOperator(BaseKernelOperator):
             self._mask_gpu = None
             return mask_tensor
 
-        if self.anatomical_image is None:
-            raise RuntimeError("An anatomical image must be set before precomputing a mask.")
-
-        n = int(self.parameters["num_neighbours"])
+        anat = self._validate_anatomical_image()
+        n = self._validate_neighbourhood(anat.shape)
         total = n ** 3
         mask_k = self.parameters["mask_k"]
         k = mask_k if mask_k is not None else total
         k = max(1, min(int(k), total))
 
         # Get anatomical array and convert to torch tensor
-        arr = np.ascontiguousarray(get_array(self.anatomical_image), dtype=self.numpy_dtype)
+        arr = np.ascontiguousarray(anat, dtype=self.numpy_dtype)
         anat_tensor = torch.from_numpy(arr).to(self.device)
 
         # Compute mask on GPU
@@ -243,19 +252,25 @@ class TorchKernelOperator(BaseKernelOperator):
         in manageable batches and returns them as a torch tensor.
         """
         if self.device.type == 'cpu':
-            weights_np = super().precompute_anatomical_weights()
+            if self._cpu_operator is None:
+                raise RuntimeError(
+                    "Numba backend required for TorchKernelOperator CPU fallback."
+                )
+            weights_np = self._cpu_operator.precompute_anatomical_weights()
+            self.mask = self._cpu_operator.mask
+            self._anatomical_weights = weights_np
             return torch.from_numpy(weights_np.astype(self.numpy_dtype)).to(self.device)
 
-        if self.anatomical_image is None:
-            raise RuntimeError("An anatomical image must be set before precomputing weights.")
+        anat = self._validate_anatomical_image()
+        n = self._validate_neighbourhood(anat.shape)
+        self._validate_sigmas()
 
-        n = int(self.parameters["num_neighbours"])
         sigma_anat = self.parameters["sigma_anat"]
         sigma_dist = self.parameters["sigma_dist"]
         distance_weighting = self.parameters["distance_weighting"]
         use_mask = self.parameters["use_mask"]
 
-        arr = np.ascontiguousarray(get_array(self.anatomical_image), dtype=self.numpy_dtype)
+        arr = np.ascontiguousarray(anat, dtype=self.numpy_dtype)
         anat_tensor = torch.from_numpy(arr).to(self.device)
 
         if use_mask:
@@ -384,6 +399,81 @@ class TorchKernelOperator(BaseKernelOperator):
                 weights[i_start:i_end, :, :, idx] = wi_an.squeeze(-1)
 
         return weights
+
+    def _torch_precompute_anatomical_weight_sum_dense(self, anat_arr, n, sigma_anat,
+                                                      sigma_dist, distance_weighting):
+        """
+        Per-voxel sum of dense anatomical weights, computed in batches over rows
+        and neighbours so the full (s0, s1, s2, n³) weight tensor is never allocated.
+        """
+        s0, s1, s2 = anat_arr.shape
+        half = n // 2
+        sig2_an = 2.0 * sigma_anat * sigma_anat
+        dist2_an = 2.0 * sigma_dist * sigma_dist
+        use_anat = sigma_anat > 0
+        use_dist = distance_weighting and sigma_dist > 0
+
+        anat_padded = self._pad_reflect_inclusive(anat_arr, half)
+
+        offsets = []
+        for di in range(-half, half + 1):
+            for dj in range(-half, half + 1):
+                for dk in range(-half, half + 1):
+                    offsets.append((di, dj, dk))
+
+        wsum = torch.zeros((s0, s1, s2), dtype=self.torch_dtype, device=self.device)
+        batch_size = min(s0, self.max_gpu_batch_slices)
+
+        for i_start in range(0, s0, batch_size):
+            i_end = min(i_start + batch_size, s0)
+            center_anat = anat_arr[i_start:i_end, :, :]
+            batch_sum = torch.zeros(
+                (i_end - i_start, s1, s2), dtype=self.torch_dtype, device=self.device
+            )
+
+            for di, dj, dk in offsets:
+                ii = slice(i_start + half + di, i_end + half + di)
+                jj = slice(half + dj, half + dj + s1)
+                kk = slice(half + dk, half + dk + s2)
+
+                neighbor_anat = anat_padded[ii, jj, kk]
+                diff_an = neighbor_anat - center_anat
+                if use_anat:
+                    w = torch.exp(-diff_an * diff_an / sig2_an)
+                else:
+                    w = torch.ones_like(diff_an)
+
+                if use_dist:
+                    dist_sq = di * di + dj * dj + dk * dk
+                    w = w * float(np.exp(-dist_sq / dist2_an))
+
+                batch_sum += w
+
+            wsum[i_start:i_end, :, :] = batch_sum
+
+        return wsum
+
+    def _torch_anatomical_weight_sum_fixed(self):
+        """
+        Per-voxel weight sum for a fixed (non-hybrid) kernel, using bounded memory.
+        """
+        anat = self._validate_anatomical_image()
+        n = self._validate_neighbourhood(anat.shape)
+        self._validate_sigmas()
+
+        if self.parameters["use_mask"]:
+            # Sparse weights only materialise k neighbours per voxel.
+            return self.precompute_anatomical_weights().sum(dim=-1)
+
+        arr = np.ascontiguousarray(anat, dtype=self.numpy_dtype)
+        anat_tensor = torch.from_numpy(arr).to(self.device)
+        return self._torch_precompute_anatomical_weight_sum_dense(
+            anat_tensor,
+            n,
+            self.parameters["sigma_anat"],
+            self.parameters["sigma_dist"],
+            self.parameters["distance_weighting"],
+        )
 
     def _torch_precompute_mask(self, anat_arr, n, k_keep):
         """
@@ -520,6 +610,7 @@ class TorchKernelOperator(BaseKernelOperator):
                 distance_weighting,
                 hybrid,
             )
+            self.frozen_emission_kernel = self._cpu_operator.frozen_emission_kernel
             norm = self._cpu_operator._normalisation_map
             if norm is not None:
                 self._normalisation_map = norm.astype(self.numpy_dtype, copy=False)
@@ -844,6 +935,7 @@ class TorchKernelOperator(BaseKernelOperator):
         """
         Adjoint operator (GPU implementation).
         """
+        self._validate_inputs(x)
         if self.device.type == 'cpu':
             if self._cpu_operator is None:
                 raise RuntimeError(
@@ -852,6 +944,7 @@ class TorchKernelOperator(BaseKernelOperator):
             self._cpu_operator.freeze_emission_kernel = self.freeze_emission_kernel
             self._cpu_operator.frozen_emission_kernel = self.frozen_emission_kernel
             res = self._cpu_operator.adjoint(x, out=out)
+            self.frozen_emission_kernel = self._cpu_operator.frozen_emission_kernel
             norm = self._cpu_operator._normalisation_map
             if norm is not None:
                 self._normalisation_map = norm.astype(self.numpy_dtype, copy=False)
@@ -876,15 +969,20 @@ class TorchKernelOperator(BaseKernelOperator):
         # Get normalization map
         if p["normalize_kernel"]:
             if self._normalisation_map_gpu is None:
-                if self._normalisation_map_cpu is not None:
-                    self._normalisation_map_gpu = self._normalisation_map_cpu.to(
-                        self.device, dtype=self.torch_dtype
-                    )
-                else:
-                    raise RuntimeError(
-                        "Normalization map has not been initialised. "
-                        "Call direct() before adjoint() when using normalize_kernel=True."
-                    )
+                if self._normalisation_map_cpu is None:
+                    if p["hybrid"]:
+                        self._get_hybrid_reference()
+                        raise RuntimeError(
+                            "Normalization map has not been initialised. "
+                            "Call direct() before adjoint() when using a hybrid kernel."
+                        )
+                    wsum = self._torch_anatomical_weight_sum_fixed()
+                    wsum = torch.where(wsum > 1e-12, wsum, torch.ones_like(wsum))
+                    self._normalisation_map_cpu = wsum.to(self.torch_dtype).cpu()
+                    self._normalisation_map = self._normalisation_map_cpu.numpy()
+                self._normalisation_map_gpu = self._normalisation_map_cpu.to(
+                    self.device, dtype=self.torch_dtype
+                )
             norm_tensor = self._normalisation_map_gpu
         else:
             norm_tensor = torch.zeros((1, 1, 1), dtype=self.torch_dtype, device=self.device)

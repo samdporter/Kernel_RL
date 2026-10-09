@@ -1,151 +1,38 @@
-import importlib
+"""Tests for the directional operator, MAPRL updates and RL freezing.
+
+The operator and algorithm tests use real CIL containers (``ImageData`` and
+``BlockDataContainer``) so that the algorithms are exercised on the same data
+structures they use in production.
+"""
 
 import numpy as np
 import pytest
+from cil.framework import BlockDataContainer, ImageGeometry
+
+from krl.algorithms.maprl import MAPRL
+from krl.algorithms.richardson_lucy import RichardsonLucy
+from krl.operators.blurring import create_gaussian_blur
+from krl.operators.directional import DirectionalOperator
+from krl.operators.kernel_operator import get_kernel_operator
 
 
-class DummyImage:
-    __array_priority__ = 1000
-
-    def __init__(self, data, geometry=None):
-        self.array = np.array(data, dtype=np.float64)
-        self.geometry = geometry if geometry is not None else ("geom", self.array.shape)
-
-    def as_array(self):
-        return self.array
-
-    def clone(self):
-        return DummyImage(self.array.copy(), self.geometry)
-
-    def fill(self, values):
-        if isinstance(values, DummyImage):
-            self.array[...] = values.array
-        else:
-            self.array[...] = values
-
-    def power(self, exponent):
-        return DummyImage(np.power(self.array, exponent), self.geometry)
-
-    def sqrt(self):
-        return DummyImage(np.sqrt(self.array), self.geometry)
-
-    def maximum(self, value, out=None):
-        value_arr = value.array if isinstance(value, DummyImage) else value
-        result = np.maximum(self.array, value_arr)
-        if out is None:
-            return DummyImage(result, self.geometry)
-        out.array = result
-        return out
-
-    def _coerce(self, other):
-        return other.array if isinstance(other, DummyImage) else other
-
-    def __add__(self, other):
-        return DummyImage(self.array + self._coerce(other), self.geometry)
-
-    def __radd__(self, other):
-        return DummyImage(self._coerce(other) + self.array, self.geometry)
-
-    def __sub__(self, other):
-        return DummyImage(self.array - self._coerce(other), self.geometry)
-
-    def __rsub__(self, other):
-        return DummyImage(self._coerce(other) - self.array, self.geometry)
-
-    def __mul__(self, other):
-        return DummyImage(self.array * self._coerce(other), self.geometry)
-
-    def __rmul__(self, other):
-        return DummyImage(self._coerce(other) * self.array, self.geometry)
-
-    def __truediv__(self, other):
-        return DummyImage(self.array / self._coerce(other), self.geometry)
-
-    def __rtruediv__(self, other):
-        return DummyImage(self._coerce(other) / self.array, self.geometry)
-
-    def __neg__(self):
-        return DummyImage(-self.array, self.geometry)
-
-    def __iadd__(self, other):
-        self.array += self._coerce(other)
-        return self
-
-    def __array__(self, dtype=None):
-        return np.asarray(self.array, dtype=dtype)
+def make_image(geometry, data):
+    image = geometry.allocate(0.0, dtype=np.float64)
+    image.fill(np.asarray(data, dtype=np.float64))
+    return image
 
 
-class DummyBlock:
-    def __init__(self, *containers):
-        self.containers = tuple(containers)
-        self.geometry = tuple(container.geometry for container in self.containers)
-
-    def clone(self):
-        return DummyBlock(*[container.clone() for container in self.containers])
-
-    def fill(self, other):
-        if isinstance(other, DummyBlock):
-            for dst, src in zip(self.containers, other.containers):
-                dst.fill(src)
-        else:
-            for dst in self.containers:
-                dst.fill(other)
-        return self
-
-    def pnorm(self):
-        squares = sum(container.as_array() ** 2 for container in self.containers)
-        return DummyImage(np.sqrt(squares))
-
-    def _apply(self, other, op):
-        if isinstance(other, DummyBlock):
-            return DummyBlock(*[op(a, b) for a, b in zip(self.containers, other.containers)])
-        return DummyBlock(*[op(a, other) for a in self.containers])
-
-    def __add__(self, other):
-        return self._apply(other, lambda a, b: a + b)
-
-    def __radd__(self, other):
-        return self.__add__(other)
-
-    def __sub__(self, other):
-        return self._apply(other, lambda a, b: a - b)
-
-    def __rsub__(self, other):
-        if isinstance(other, DummyBlock):
-            return other.__sub__(self)
-        return DummyBlock(*[other - a for a in self.containers])
-
-    def __mul__(self, other):
-        return self._apply(other, lambda a, b: a * b)
-
-    def __rmul__(self, other):
-        return self.__mul__(other)
-
-    def __truediv__(self, other):
-        return self._apply(other, lambda a, b: a / b)
-
-    def __iter__(self):
-        return iter(self.containers)
+@pytest.fixture
+def directional_geometry():
+    return ImageGeometry(voxel_num_x=2, voxel_num_y=2, voxel_num_z=1, dtype=np.float64)
 
 
-@pytest.fixture(scope="module")
-def directional_module():
-    module = importlib.import_module("krl.operators.directional")
-    return importlib.reload(module)
-
-
-@pytest.fixture(scope="module")
-def maprl_module():
-    module = importlib.import_module("krl.algorithms.maprl")
-    return importlib.reload(module)
-
-
-def test_directional_operator_xi_normalization(directional_module):
-    anatomical = DummyBlock(
-        DummyImage([[3.0, 4.0], [0.0, 5.0]], geometry="g0"),
-        DummyImage([[4.0, 0.0], [0.0, 0.0]], geometry="g1"),
+def test_directional_operator_xi_normalization(directional_geometry):
+    anatomical = BlockDataContainer(
+        make_image(directional_geometry, [[3.0, 4.0], [0.0, 5.0]]),
+        make_image(directional_geometry, [[4.0, 0.0], [0.0, 0.0]]),
     )
-    operator = directional_module.DirectionalOperator(anatomical, gamma=0.5, eta=0.2)
+    operator = DirectionalOperator(anatomical, gamma=0.5, eta=0.2)
 
     sum_squares = sum(container.as_array() ** 2 for container in anatomical.containers)
     expected_norm = np.sqrt(sum_squares + 0.2**2)
@@ -157,16 +44,16 @@ def test_directional_operator_xi_normalization(directional_module):
         )
 
 
-def test_directional_operator_direct_writes_to_out(directional_module):
-    anatomical = DummyBlock(
-        DummyImage([[1.0, 2.0]], geometry="g0"),
-        DummyImage([[0.5, 0.5]], geometry="g1"),
+def test_directional_operator_direct_writes_to_out(directional_geometry):
+    anatomical = BlockDataContainer(
+        make_image(directional_geometry, [[1.0, 2.0], [0.0, 1.0]]),
+        make_image(directional_geometry, [[0.5, 0.5], [0.5, 0.5]]),
     )
-    operator = directional_module.DirectionalOperator(anatomical, gamma=0.3, eta=0.1)
+    operator = DirectionalOperator(anatomical, gamma=0.3, eta=0.1)
 
-    test_block = DummyBlock(
-        DummyImage([[2.0, -1.0]], geometry="g0"),
-        DummyImage([[0.0, 1.5]], geometry="g1"),
+    test_block = BlockDataContainer(
+        make_image(directional_geometry, [[2.0, -1.0], [0.5, 0.0]]),
+        make_image(directional_geometry, [[0.0, 1.5], [-0.5, 1.0]]),
     )
     out = test_block.clone()
     operator.direct(test_block, out=out)
@@ -178,20 +65,20 @@ def test_directional_operator_direct_writes_to_out(directional_module):
         assert np.allclose(out_comp.as_array(), exp_comp.as_array())
 
 
-def test_directional_operator_dot_resets_accumulator(directional_module):
-    anatomical = DummyBlock(
-        DummyImage([[1.0, 1.0]], geometry="g0"),
-        DummyImage([[1.0, 1.0]], geometry="g1"),
+def test_directional_operator_dot_resets_accumulator(directional_geometry):
+    anatomical = BlockDataContainer(
+        make_image(directional_geometry, [[1.0, 1.0], [1.0, 1.0]]),
+        make_image(directional_geometry, [[1.0, 1.0], [1.0, 1.0]]),
     )
-    operator = directional_module.DirectionalOperator(anatomical, gamma=1.0, eta=0.01)
+    operator = DirectionalOperator(anatomical, gamma=1.0, eta=0.01)
 
-    block_a = DummyBlock(
-        DummyImage([[2.0, 3.0]], geometry="g0"),
-        DummyImage([[4.0, 5.0]], geometry="g1"),
+    block_a = BlockDataContainer(
+        make_image(directional_geometry, [[2.0, 3.0], [0.0, 1.0]]),
+        make_image(directional_geometry, [[4.0, 5.0], [1.0, 0.0]]),
     )
-    block_b = DummyBlock(
-        DummyImage([[0.5, 1.0]], geometry="g0"),
-        DummyImage([[1.5, 2.0]], geometry="g1"),
+    block_b = BlockDataContainer(
+        make_image(directional_geometry, [[0.5, 1.0], [1.0, 0.5]]),
+        make_image(directional_geometry, [[1.5, 2.0], [0.0, 1.0]]),
     )
 
     dot_a = operator.dot(block_a, block_a).as_array()
@@ -209,63 +96,148 @@ def test_directional_operator_dot_resets_accumulator(directional_module):
     assert np.allclose(dot_b, expected_b)
 
 
-def test_maprl_update_combines_data_and_prior_gradients(maprl_module):
-    initial = DummyImage([[1.0, 2.0]])
+class LinearGradientFunctional:
+    def __init__(self, gradient, value):
+        self._gradient = gradient
+        self._value = value
 
-    class DataFunctional:
-        def gradient(self, x):
-            return DummyImage([[0.2, -0.1]])
+    def gradient(self, x):
+        return make_image(x.geometry, self._gradient)
 
-        def __call__(self, x):
-            return float(np.sum(x.as_array()))
+    def __call__(self, x):
+        return float(self._value)
 
-    class PriorFunctional:
-        def gradient(self, x):
-            return DummyImage([[-0.3, 0.5]])
 
-        def __call__(self, x):
-            return float(np.sum(x.as_array() ** 2))
+def test_maprl_update_combines_data_and_prior_gradients():
+    geometry = ImageGeometry(voxel_num_x=2, voxel_num_y=2, voxel_num_z=1, dtype=np.float64)
+    initial = make_image(geometry, [[1.0, 2.0], [0.5, 1.5]])
 
-    algorithm = maprl_module.MAPRL(
+    algorithm = MAPRL(
         initial_estimate=initial,
-        data_fidelity=DataFunctional(),
-        prior=PriorFunctional(),
+        data_fidelity=LinearGradientFunctional([[0.2, -0.1], [0.1, 0.3]], 3.0),
+        prior=LinearGradientFunctional([[-0.3, 0.5], [0.0, -0.2]], 5.0),
         step_size=0.4,
         relaxation_eta=0.0,
         eps=0.2,
+        initial_line_search=False,
+        armijo_iterations=0,
     )
-    algorithm.iteration = 1
+    algorithm.run(iterations=1, verbose=0)
 
-    algorithm.update()
-    combined_grad = np.array([[0.2, -0.1]]) + np.array([[-0.3, 0.5]])
+    combined_grad = np.array([[0.2, -0.1], [0.1, 0.3]]) + np.array([[-0.3, 0.5], [0.0, -0.2]])
     expected = initial.as_array() - (initial.as_array() + 0.2) * combined_grad * 0.4
     expected = np.maximum(expected, 0.0)
 
+    assert algorithm._update_count == 1
     assert np.allclose(algorithm.x.as_array(), expected)
-    assert np.allclose(initial.as_array(), np.array([[1.0, 2.0]]))
+    assert np.allclose(initial.as_array(), np.array([[1.0, 2.0], [0.5, 1.5]]))
 
 
-def test_maprl_update_projects_negative_values(maprl_module):
-    initial = DummyImage([[0.1, 0.1]])
+def test_maprl_update_projects_negative_values():
+    geometry = ImageGeometry(voxel_num_x=2, voxel_num_y=2, voxel_num_z=1, dtype=np.float64)
+    initial = make_image(geometry, [[0.1, 0.1], [0.1, 0.1]])
 
-    class PositiveGradient:
-        def gradient(self, x):
-            return DummyImage([[5.0, 5.0]])
-
-        def __call__(self, x):
-            return float(np.sum(x.as_array()))
-
-    zero_prior = PositiveGradient()
-    zero_prior.gradient = lambda x: DummyImage([[0.0, 0.0]])  # type: ignore[attr-defined]
-
-    algorithm = maprl_module.MAPRL(
+    algorithm = MAPRL(
         initial_estimate=initial,
-        data_fidelity=PositiveGradient(),
-        prior=zero_prior,
+        data_fidelity=LinearGradientFunctional([[5.0, 5.0], [5.0, 5.0]], 1.0),
+        prior=LinearGradientFunctional([[0.0, 0.0], [0.0, 0.0]], 0.0),
         step_size=1.0,
         relaxation_eta=0.0,
         eps=0.0,
+        initial_line_search=False,
+        armijo_iterations=0,
     )
 
-    algorithm.update()
+    algorithm.run(iterations=1, verbose=0)
     assert np.allclose(algorithm.x.as_array(), np.zeros_like(initial.as_array()))
+
+
+class FreezeRecorder:
+    def __init__(self):
+        self.records = []
+
+    def __call__(self, algorithm):
+        self.records.append(
+            (algorithm._update_count, algorithm.kernel_operator.freeze_emission_kernel)
+        )
+
+
+@pytest.fixture
+def freeze_setup():
+    geometry = ImageGeometry(voxel_num_x=12, voxel_num_y=12, voxel_num_z=6, dtype=np.float32)
+    phantom = geometry.allocate(0.0)
+    array = np.zeros((6, 12, 12), dtype=np.float32)
+    z, y, x = np.indices(array.shape)
+    array += 50 * np.exp(-((z - 2) ** 2 + (y - 4) ** 2 + (x - 4) ** 2) / 4.0)
+    phantom.fill(array)
+
+    blur = create_gaussian_blur(sigma=(1.0, 1.0, 1.0), geometry=geometry, backend="numba")
+    observed = blur.direct(phantom)
+    return geometry, phantom, blur, observed
+
+
+def make_kernel(geometry, anatomical):
+    kernel = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        use_mask=True,
+        mask_k=10,
+        normalize_kernel=True,
+        hybrid=False,
+    )
+    kernel.set_anatomical_image(anatomical)
+    return kernel
+
+
+@pytest.mark.parametrize("update_objective_interval", [0, 1, 3])
+@pytest.mark.parametrize("freeze_iteration", [0, 1, 2])
+def test_rl_freeze_schedule(freeze_setup, freeze_iteration, update_objective_interval):
+    geometry, phantom, blur, observed = freeze_setup
+    kernel = make_kernel(geometry, phantom)
+    recorder = FreezeRecorder()
+
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur,
+        observed_data=observed,
+        kernel_operator=kernel,
+        freeze_iteration=freeze_iteration,
+        update_objective_interval=update_objective_interval,
+    )
+    rl.run(iterations=4, verbose=0, callbacks=[recorder])
+
+    assert rl._update_count == 4
+    frozen_at = [count for count, frozen in recorder.records if frozen]
+
+    if freeze_iteration == 0:
+        assert frozen_at == []
+        assert not kernel.freeze_emission_kernel
+    else:
+        assert frozen_at == list(range(freeze_iteration, 5))
+        assert kernel.freeze_emission_kernel
+        assert np.all(np.isfinite(rl.x.as_array()))
+
+
+def test_rl_freeze_resumes_across_runs(freeze_setup):
+    geometry, phantom, blur, observed = freeze_setup
+    kernel = make_kernel(geometry, phantom)
+    recorder = FreezeRecorder()
+
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur,
+        observed_data=observed,
+        kernel_operator=kernel,
+        freeze_iteration=2,
+    )
+
+    rl.run(iterations=1, verbose=0, callbacks=[recorder])
+    assert rl._update_count == 1
+    assert not kernel.freeze_emission_kernel
+
+    rl.run(iterations=3, verbose=0, callbacks=[recorder])
+    assert rl._update_count == 4
+    assert kernel.freeze_emission_kernel
+    assert [count for count, frozen in recorder.records if frozen] == [2, 3, 4]

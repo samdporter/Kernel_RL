@@ -55,6 +55,9 @@ class MAPRL(Algorithm):
         self.armijo_update_interval = armijo_update_interval
         self._initial_loss = None
         self._current_step_size = step_size  # Track the current step size found by Armijo
+        # Counts actual updates independently of CIL's reporting label so that
+        # scheduling remains correct for any update_objective_interval.
+        self._update_count = 0
 
         self.x = initial_estimate.clone()
         self.data_fidelity = data_fidelity
@@ -95,24 +98,30 @@ class MAPRL(Algorithm):
 
     def step_size(self):
         initial_block = self._armijo_initial_block()
-        if initial_block > 0 and self.iteration <= initial_block:
+        if initial_block > 0 and self._update_count <= initial_block:
             return self._current_step_size
         baseline_step = self.initial_step_size or self._current_step_size
-        decay_iter = max(self.iteration, 1)
+        decay_iter = max(self._update_count, 1)
         denom = 1 + self.relaxation_eta * decay_iter
         if denom == 0:
             return baseline_step
         return baseline_step / denom
 
     def update(self):
+        self._update_count += 1
+
         # Update preconditioner if needed
         if self.preconditioner is not None:
-            should_update = False
-            if self.iteration <= self.preconditioner_update_initial:
-                # Update every iteration for first N iterations
-                should_update = True
-            elif self.iteration % self.preconditioner_update_interval == 0:
-                # Then update periodically
+            # Always initialise on first use, then during the initial window,
+            # then periodically if a positive interval is configured.
+            should_update = (
+                self._update_count == 1
+                or self._update_count <= self.preconditioner_update_initial
+            )
+            if (
+                self.preconditioner_update_interval > 0
+                and self._update_count % self.preconditioner_update_interval == 0
+            ):
                 should_update = True
 
             if should_update:
@@ -125,24 +134,24 @@ class MAPRL(Algorithm):
                 if hasattr(self._preconditioner_image, 'as_array'):
                     prec_arr = self._preconditioner_image.as_array()
                     LOGGER.info(
-                        "MAPRL: updated preconditioner at iteration %d (min=%.3e, max=%.3e, mean=%.3e)",
-                        self.iteration,
+                        "MAPRL: updated preconditioner at update %d (min=%.3e, max=%.3e, mean=%.3e)",
+                        self._update_count,
                         float(np.min(prec_arr)),
                         float(np.max(prec_arr)),
                         float(np.mean(prec_arr)),
                     )
                 else:
-                    LOGGER.info("MAPRL: updated preconditioner at iteration %d", self.iteration)
+                    LOGGER.info("MAPRL: updated preconditioner at update %d", self._update_count)
 
-        # Determine if we should perform Armijo line search at this iteration
+        # Determine if we should perform Armijo line search at this update
         initial_block = self._armijo_initial_block()
-        should_armijo = initial_block > 0 and self.iteration <= initial_block
+        should_armijo = initial_block > 0 and self._update_count <= initial_block
         if (
             not should_armijo
             and self.armijo_iterations > 0
-            and self.iteration <= self.armijo_iterations
+            and self._update_count <= self.armijo_iterations
             and self.armijo_update_interval > 0
-            and self.iteration % self.armijo_update_interval == 0
+            and self._update_count % self.armijo_update_interval == 0
         ):
             # After the initial block, fall back to periodic Armijo updates
             should_armijo = True
@@ -150,8 +159,8 @@ class MAPRL(Algorithm):
         # Perform Armijo line search if scheduled
         if should_armijo:
             LOGGER.info(
-                "MAPRL Armijo: performing line search at iteration %d (starting from step %.4g)",
-                self.iteration,
+                "MAPRL Armijo: performing line search at update %d (starting from step %.4g)",
+                self._update_count,
                 self.initial_step_size,
             )
             # Always restart from initial_step_size for Armijo search
@@ -159,8 +168,8 @@ class MAPRL(Algorithm):
             # Update current step size to use the found step
             self._current_step_size = step
             LOGGER.info(
-                "MAPRL Armijo: iteration %d accepted step %.4g (objective %.6g)",
-                self.iteration,
+                "MAPRL Armijo: update %d accepted step %.4g (objective %.6g)",
+                self._update_count,
                 step,
                 loss,
             )

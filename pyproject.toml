@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cil-krl"
-version = "0.2.0"
+version = "0.3.0"
 description = "Kernelised Richardson-Lucy deconvolution for PET with anatomical guidance, built as a CIL plugin"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 authors = [
-    {name = "Kjell Erlandsson", email = "kjell.erlandsson@kcl.ac.uk"},
+    {name = "Kjell Erlandsson", email = "k.erlandsson@ucl.ac.uk"},
+    {name = "Sam Porter", email = "sam.porter.18@ucl.ac.uk"},
 ]
 keywords = [
     "PET",
@@ -35,8 +36,9 @@ classifiers = [
 ]
 
 # NOTE: CIL is a runtime requirement but is not pip-installable from PyPI.
-# Install CIL first (conda: `conda install -c conda-forge -c ccpi cil`),
-# then `pip install cil-krl`.
+# Install CIL first (conda: `conda install -c conda-forge -c ccpi cil`), then
+# install this package from source (`pip install -e .`) or from a built wheel;
+# it is not published on PyPI either.
 dependencies = [
     "numpy>=1.23",
     "scipy>=1.7",
@@ -58,9 +60,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/KCL-BMEIS/KRL"
-Repository = "https://github.com/KCL-BMEIS/KRL"
-Issues = "https://github.com/KCL-BMEIS/KRL/issues"
+Homepage = "https://github.com/samdporter/Kernel_RL"
+Repository = "https://github.com/samdporter/Kernel_RL"
+Issues = "https://github.com/samdporter/Kernel_RL/issues"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

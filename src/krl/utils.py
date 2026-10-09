@@ -14,7 +14,7 @@ def get_array(x):
     Parameters
     ----------
     x : object
-        Data container (CIL ImageData, SIRF ImageData, or numpy array)
+        Data container (CIL ImageData or numpy array)
 
     Returns
     -------
@@ -38,15 +38,33 @@ def load_nifti_as_imagedata(filepath):
     Parameters
     ----------
     filepath : str or Path
-        Path to .nii or .nii.gz file
+        Path to a 3-D .nii or .nii.gz file
 
     Returns
     -------
     ImageData
         CIL ImageData container with loaded image
+
+    Raises
+    ------
+    ValueError
+        If the file is not a 3-D volume or has a singleton axis; CIL cannot
+        represent size-1 dimensions (they are dropped or rejected).
     """
     nii = nib.load(str(filepath))
     data = nii.get_fdata().astype(np.float32)
+
+    if data.ndim != 3:
+        raise ValueError(
+            f"Unsupported NIfTI shape {data.shape} in {filepath}: "
+            "only 3-D volumes can be converted to CIL ImageData"
+        )
+    if 1 in data.shape:
+        raise ValueError(
+            f"Unsupported NIfTI shape {data.shape} in {filepath}: "
+            "singleton axes cannot be converted to CIL ImageData "
+            "(CIL drops size-1 dimensions or fails to fill the container)"
+        )
 
     # Get voxel sizes from affine (in mm)
     voxel_sizes = nib.affines.voxel_sizes(nii.affine)
@@ -86,7 +104,7 @@ def load_image(filepath):
     """
     filepath = Path(filepath)
 
-    if filepath.suffix in ['.nii', '.gz'] or str(filepath).endswith('.nii.gz'):
+    if filepath.name.endswith('.nii.gz') or filepath.suffix == '.nii':
         return load_nifti_as_imagedata(filepath)
     else:
         raise ValueError(
@@ -101,6 +119,9 @@ def save_image(image, filepath):
     """
     Save an image to file.
 
+    The file records voxel values and voxel spacing only; it does not preserve
+    an original NIfTI affine or header.
+
     Parameters
     ----------
     image : ImageData
@@ -110,7 +131,7 @@ def save_image(image, filepath):
     """
     filepath = Path(filepath)
 
-    if not (filepath.suffix in ['.nii', '.gz'] or str(filepath).endswith('.nii.gz')):
+    if not (filepath.name.endswith('.nii.gz') or filepath.suffix == '.nii'):
         raise ValueError(
             f"Unsupported file format: {filepath.suffix}. "
             "Supported formats: .nii, .nii.gz"
