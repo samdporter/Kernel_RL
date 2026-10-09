@@ -18,8 +18,8 @@ authors:
 identifiers:
   - description: This software
     type: url
-    value: https://github.com/KCL-BMEIS/KRL
-repository-code: "https://github.com/KCL-BMEIS/KRL"
+    value: https://github.com/samdporter/Kernel_RL
+repository-code: "https://github.com/samdporter/Kernel_RL"
 abstract: >-
   A CIL plugin implementing anatomically-guided (kernelised)
   Richardson-Lucy deconvolution for PET imaging, with CPU and GPU

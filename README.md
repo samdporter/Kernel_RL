@@ -1,6 +1,6 @@
 # cil-krl: Kernelised Richardson-Lucy Deconvolution for PET
 
-[![CI](https://github.com/KCL-BMEIS/KRL/actions/workflows/ci.yml/badge.svg)](https://github.com/KCL-BMEIS/KRL/actions/workflows/ci.yml)
+[![CI](https://github.com/samdporter/Kernel_RL/actions/workflows/ci.yml/badge.svg)](https://github.com/samdporter/Kernel_RL/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 **cil-krl** is a plugin for the [Core Imaging Library (CIL)](https://github.com/TomographicImaging/CIL)
@@ -43,7 +43,7 @@ conda create -n krl -c conda-forge -c ccpi python=3.11 cil=26.0.0 pip
 conda activate krl
 
 # 2. Install cil-krl from a checkout
-git clone https://github.com/KCL-BMEIS/KRL.git && cd KRL
+git clone https://github.com/samdporter/Kernel_RL.git && cd Kernel_RL
 pip install -e ".[dev]"      # + pytest, ruff
 # pip install -e ".[gpu]"    # optional: adds PyTorch for the torch backend
 ```
@@ -240,10 +240,10 @@ If you use cil-krl in your research, please cite it and CIL:
 
 ```bibtex
 @software{krl2025,
-  author = {Erlandsson, Kjell},
+  author = {Erlandsson, Kjell and Porter, Sam},
   title = {cil-krl: Kernelised Richardson-Lucy Deconvolution for PET},
   year = {2025},
-  url = {https://github.com/KCL-BMEIS/KRL}
+  url = {https://github.com/samdporter/Kernel_RL}
 }
 ```
 
