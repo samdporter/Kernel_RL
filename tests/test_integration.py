@@ -166,6 +166,29 @@ def test_lbfgsb_reduces_objective(phantom, observed):
     assert optimizer.objective[-1] < optimizer.objective[0]
 
 
+def test_lbfgsb_preconditioned_reduces_objective(phantom, blur, observed):
+    """L-BFGS-B reduces a real objective with an EM-type diagonal preconditioner."""
+    prior = make_dtv_prior(phantom.geometry, phantom, observed)
+    ones = observed.geometry.allocate(1.0)
+    sensitivity = np.maximum(blur.adjoint(ones).as_array(), 1e-6)
+    diagonal = (observed.as_array() + 1e-6) / sensitivity
+    preconditioner = observed.geometry.allocate(0.0)
+    preconditioner.fill(diagonal)
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=observed.clone(),
+        data_fidelity=L2NormSquared(b=observed),
+        prior=prior,
+        preconditioner=preconditioner,
+        options=LBFGSBOptions(ftol=1e-10, gtol=1e-10),
+    )
+    optimizer.run(iterations=15, verbose=0)
+
+    assert float(np.all(np.isfinite(optimizer.solution.as_array())))
+    assert optimizer.objective[-1] < optimizer.objective[0]
+    assert float(optimizer.solution.min()) >= 0
+
+
 def test_callbacks_run_through_cil_algorithm(phantom, blur, observed, tmp_path):
     """NRMSE and SaveIteration callbacks run through a real CIL Algorithm.run()."""
     nrmse = NRMSECallback(
