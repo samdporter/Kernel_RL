@@ -169,7 +169,7 @@ class MAPRL(Algorithm):
 
             # Apply preconditioner if available
             if self._preconditioner_image is not None:
-                # then multiplied by (x + eps) as usual
+                # the preconditioner replaces the (x + eps) EM scaling
                 precond_grad = grad * self._preconditioner_image
                 self.x = self.x - precond_grad * self.step_size()
             else:
