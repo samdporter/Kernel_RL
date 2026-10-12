@@ -1,24 +1,10 @@
 import logging
-import os
 
 import numpy as np
 from cil.optimisation.algorithms import Algorithm
 
 LOGGER = logging.getLogger(__name__)
-if not LOGGER.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter("%(levelname)s:%(name)s:%(message)s")
-    handler.setFormatter(formatter)
-    LOGGER.addHandler(handler)
-level_name = os.environ.get("MAPRL_LOG_LEVEL")
-if level_name is None:
-    LOGGER.setLevel(logging.INFO)
-else:
-    try:
-        LOGGER.setLevel(getattr(logging, level_name.upper()))
-    except AttributeError:
-        LOGGER.setLevel(logging.INFO)
-LOGGER.propagate = False
+
 
 class MAPRL(Algorithm):
     def __init__(
@@ -74,6 +60,11 @@ class MAPRL(Algorithm):
         self.configured = True
 
         if self.initial_line_search:
+            if self.preconditioner is not None:
+                if callable(self.preconditioner):
+                    self._preconditioner_image = self.preconditioner(self.x)
+                else:
+                    self._preconditioner_image = self.preconditioner
             LOGGER.info(
                 "MAPRL Armijo: starting search with suggested step %.4g",
                 self.initial_step_size,

@@ -34,6 +34,20 @@ class ConstantFunctional:
         return float(self._value)
 
 
+class QuadraticFunctional:
+    """Isotropic quadratic 0.5 * ||x - target||^2 with gradient x - target."""
+
+    def __init__(self, target):
+        self.target = target
+
+    def gradient(self, x):
+        return x - self.target
+
+    def __call__(self, x):
+        diff = x.as_array() - self.target.as_array()
+        return 0.5 * float(np.sum(diff ** 2))
+
+
 class RecordingMAPRL(MAPRL):
     """MAPRL that records every preconditioner refresh via actual update count."""
 
@@ -365,4 +379,114 @@ def test_maprl_schedules_resume_across_runs(geometry):
         assert armijo_updates == [1, 3, 6]
     finally:
         MAPRL._armijo_step = original_armijo_step
+
+
+def assert_initial_armijo_inequality(
+    initial, data_fidelity, prior, accepted_step, sigma, preconditioner_image=None, eps=0.0
+):
+    """Independently verify the Armijo condition at the accepted initial step."""
+    grad = data_fidelity.gradient(initial) + prior.gradient(initial)
+    if preconditioner_image is not None:
+        direction = grad * preconditioner_image
+    else:
+        direction = (initial + eps) * grad
+    slope = float(np.sum(direction.as_array() * grad.as_array()))
+    reference_loss = float(data_fidelity(initial) + prior(initial))
+    candidate = initial - direction * accepted_step
+    candidate.maximum(0, out=candidate)
+    candidate_loss = float(data_fidelity(candidate) + prior(candidate))
+    assert candidate_loss <= reference_loss - sigma * accepted_step * slope + 1e-8
+
+
+def make_initial_search_maprl(geometry, preconditioner=None):
+    return MAPRL(
+        initial_estimate=make_image(geometry, 1.0),
+        data_fidelity=QuadraticFunctional(make_image(geometry, 2.0)),
+        prior=ConstantFunctional(0.0, 1.0),
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=True,
+        armijo_beta=0.5,
+        armijo_sigma=1e-4,
+        preconditioner=preconditioner,
+    )
+
+
+def test_static_preconditioner_sets_initial_armijo_direction(geometry):
+    """A static preconditioner changes the constructor's accepted Armijo step."""
+    initial = make_image(geometry, 1.0)
+    preconditioner = make_image(geometry, 10.0)
+    data_fidelity = QuadraticFunctional(make_image(geometry, 2.0))
+    prior = ConstantFunctional(0.0, 1.0)
+
+    em = make_initial_search_maprl(geometry)
+    preconditioned = make_initial_search_maprl(geometry, preconditioner=preconditioner)
+
+    # EM direction accepts the suggested step; the scaled preconditioner
+    # direction backtracks two halvings further.
+    assert em._current_step_size == pytest.approx(1.0)
+    assert preconditioned._current_step_size == pytest.approx(0.125)
+
+    assert_initial_armijo_inequality(
+        initial, data_fidelity, prior, em._current_step_size, sigma=1e-4
+    )
+    assert_initial_armijo_inequality(
+        initial,
+        data_fidelity,
+        prior,
+        preconditioned._current_step_size,
+        sigma=1e-4,
+        preconditioner_image=preconditioner,
+    )
+
+
+def test_callable_preconditioner_sets_initial_armijo_direction(geometry):
+    """A callable preconditioner is used for the constructor's initial search."""
+    calls = []
+
+    def preconditioner(x):
+        calls.append(x.as_array().copy())
+        return make_image(x.geometry, 10.0)
+
+    maprl = make_initial_search_maprl(geometry, preconditioner=preconditioner)
+
+    assert maprl._current_step_size == pytest.approx(0.125)
+    assert len(calls) == 1
+    assert np.allclose(calls[0], maprl.x.as_array())
+
+    assert_initial_armijo_inequality(
+        make_image(geometry, 1.0),
+        QuadraticFunctional(make_image(geometry, 2.0)),
+        ConstantFunctional(0.0, 1.0),
+        maprl._current_step_size,
+        sigma=1e-4,
+        preconditioner_image=make_image(geometry, 10.0),
+    )
+
+
+def test_constructor_initial_search_preserves_initial_state(geometry):
+    """Construction leaves x at the initial estimate and performs no updates."""
+    initial = make_image(geometry, 1.0)
+    maprl = make_initial_search_maprl(geometry, preconditioner=make_image(geometry, 10.0))
+
+    assert np.allclose(maprl.x.as_array(), initial.as_array())
+    assert maprl._update_count == 0
+
+
+def test_constructor_leaves_lazy_preconditioner_untouched(geometry):
+    """Without initial line search the callable preconditioner is not called."""
+    calls = []
+
+    def preconditioner(x):
+        calls.append(x)
+        return make_image(x.geometry, 10.0)
+
+    maprl = make_maprl(
+        geometry,
+        preconditioner=preconditioner,
+        preconditioner_update_initial=5,
+    )
+
+    assert calls == []
+    assert maprl._preconditioner_image is None
 

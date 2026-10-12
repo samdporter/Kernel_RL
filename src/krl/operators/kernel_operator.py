@@ -314,12 +314,10 @@ class BaseKernelOperator(LinearOperator):
         return out
 
     def adjoint(self, x, out=None):
-        # default: same as forward (kernel remains self-adjoint without mask/hybrid)
-        res = self.direct(x)
-        if out is None:
-            return res
-        out.fill(get_array(res))
-        return out
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement an adjoint; the "
+            "concrete operator subclasses must override adjoint()."
+        )
 
 
 class KernelOperator(BaseKernelOperator):

@@ -7,6 +7,7 @@ from cil.optimisation.operators import ScaledOperator
 
 from krl.operators.directional import DirectionalOperator
 from krl.operators.kernel_operator import (
+    BaseKernelOperator,
     KernelOperator,
     get_kernel_operator,
 )
@@ -21,10 +22,6 @@ def make_image(geometry, array):
     image = geometry.allocate()
     image.fill(np.asarray(array, dtype=geometry.dtype))
     return image
-
-
-def available_backends():
-    return ["numba"]
 
 
 @pytest.fixture
@@ -61,11 +58,10 @@ def emission_image_uniform(geometry):
     return geometry.allocate(1.0)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_uniform_identity(anatomical_uniform, geometry, backend):
+def test_uniform_identity(anatomical_uniform, geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=1.0,
         sigma_dist=1.0,
@@ -78,11 +74,10 @@ def test_uniform_identity(anatomical_uniform, geometry, backend):
     assert np.allclose(result.as_array(), 5.0, atol=1e-3, rtol=1e-3)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_smoothing_effect(anatomical_uniform, emission_spike, geometry, backend):
+def test_smoothing_effect(anatomical_uniform, emission_spike, geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.3,
         sigma_dist=1.0,
@@ -96,14 +91,13 @@ def test_smoothing_effect(anatomical_uniform, emission_spike, geometry, backend)
     assert np.var(result_arr) < np.var(emission_spike.as_array())
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_adjoint_dot_product_float64_data_with_float32_anatomy(geometry, backend):
+def test_adjoint_dot_product_float64_data_with_float32_anatomy(geometry):
     """Regression: forward output must follow the input dtype, not the
     anatomical image's. A float32 anatomy previously truncated the forward
     result to float32, breaking adjointness against float64 data."""
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.4,
         normalize_kernel=True,
@@ -164,11 +158,10 @@ def test_input_dtype_preserved(geometry, anat_dtype, input_dtype):
     assert adjoint_out.dtype == input_dtype
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_adjoint_dot_product(geometry, backend):
+def test_adjoint_dot_product(geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -329,11 +322,10 @@ def test_recalc_mask_rebuilds_mask(geometry, monkeypatch):
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_hybrid_adjoint_dot_product(geometry, backend):
+def test_hybrid_adjoint_dot_product(geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -356,11 +348,10 @@ def test_hybrid_adjoint_dot_product(geometry, backend):
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_hybrid_adjoint_mormalized_dot_product(geometry, backend):
+def test_hybrid_adjoint_mormalized_dot_product(geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -394,12 +385,11 @@ def test_mask_available_with_numba(geometry):
     assert operator.mask.shape[-1] == operator.parameters["mask_k"]
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_mask_selects_expected_neighbours(geometry, backend, anatomical_image_gradient, emission_image_uniform):
+def test_mask_selects_expected_neighbours(geometry, anatomical_image_gradient, emission_image_uniform):
     mask_k = 5
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.2,
         sigma_dist=0.5,
@@ -421,8 +411,7 @@ def test_mask_selects_expected_neighbours(geometry, backend, anatomical_image_gr
     assert np.all(mask < n_cubed)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_normalized_kernel_bounds_output(geometry, backend, emission_spike):
+def test_normalized_kernel_bounds_output(geometry, emission_spike):
     spike = emission_spike
     anat = geometry.allocate(1.0)
 
@@ -432,11 +421,11 @@ def test_normalized_kernel_bounds_output(geometry, backend, emission_spike):
         num_neighbours=5,
         use_mask=False,
     )
-    operator_raw = get_kernel_operator(geometry, backend=backend, normalize_kernel=False, **base_kwargs)
+    operator_raw = get_kernel_operator(geometry, backend="numba", normalize_kernel=False, **base_kwargs)
     operator_raw.set_anatomical_image(anat)
     raw = operator_raw.direct(spike).as_array()
 
-    operator_norm = get_kernel_operator(geometry, backend=backend, normalize_kernel=True, **base_kwargs)
+    operator_norm = get_kernel_operator(geometry, backend="numba", normalize_kernel=True, **base_kwargs)
     operator_norm.set_anatomical_image(anat)
     norm = operator_norm.direct(spike).as_array()
 
@@ -444,14 +433,13 @@ def test_normalized_kernel_bounds_output(geometry, backend, emission_spike):
     assert np.isclose(norm.sum(), spike.as_array().sum(), rtol=1e-3, atol=1e-3)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_neighbourhood_size_adjusts_smoothing(geometry, backend, emission_spike):
+def test_neighbourhood_size_adjusts_smoothing(geometry, emission_spike):
     spike = emission_spike
     anat = geometry.allocate(1.0)
 
     operator_small = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.3,
         sigma_dist=1.0,
@@ -462,7 +450,7 @@ def test_neighbourhood_size_adjusts_smoothing(geometry, backend, emission_spike)
 
     operator_large = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.3,
         sigma_dist=1.0,
@@ -476,11 +464,10 @@ def test_neighbourhood_size_adjusts_smoothing(geometry, backend, emission_spike)
     assert np.var(res_large) >= np.var(res_small) * 0.9  # Allow 10% tolerance
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_normalize_features_scales_anatomical_image(geometry, backend):
+def test_normalize_features_scales_anatomical_image(geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         normalize_features=True,
         normalize_kernel=False,
     )
@@ -497,8 +484,7 @@ def test_normalize_features_scales_anatomical_image(geometry, backend):
     assert np.allclose(stored, expected, rtol=1e-6, atol=1e-6)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_distance_weighting_emphasises_near_voxels(geometry, backend):
+def test_distance_weighting_emphasises_near_voxels(geometry):
     center = tuple(idx // 2 for idx in geometry.shape)
     spike_arr = np.zeros(geometry.shape, dtype=np.float64)
     spike_arr[center] = 1.0
@@ -515,11 +501,11 @@ def test_distance_weighting_emphasises_near_voxels(geometry, backend):
         use_mask=False,
     )
 
-    op_no_dist = get_kernel_operator(geometry, backend=backend, distance_weighting=False, **base_kwargs)
+    op_no_dist = get_kernel_operator(geometry, backend="numba", distance_weighting=False, **base_kwargs)
     op_no_dist.set_anatomical_image(anat)
     res_no = op_no_dist.direct(spike).as_array()
 
-    op_dist = get_kernel_operator(geometry, backend=backend, distance_weighting=True, **base_kwargs)
+    op_dist = get_kernel_operator(geometry, backend="numba", distance_weighting=True, **base_kwargs)
     op_dist.set_anatomical_image(anat)
     res_dist = op_dist.direct(spike).as_array()
 
@@ -527,12 +513,11 @@ def test_distance_weighting_emphasises_near_voxels(geometry, backend):
     assert np.isclose(res_dist.sum(), spike_arr.sum(), rtol=1e-5, atol=1e-8)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_mask_k_picks_most_similar_neighbours(geometry, backend):
+def test_mask_k_picks_most_similar_neighbours(geometry):
     mask_k = 7
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -583,16 +568,14 @@ def test_mask_k_picks_most_similar_neighbours(geometry, backend):
     assert selected_indices == expected_indices
 
 
-@pytest.mark.parametrize("backend", available_backends())
 def test_sigma_anatomical_parameter_changes_weights(
     geometry,
-    backend,
     anatomical_image_gradient,
     emission_random,
 ):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.1,
         sigma_dist=1.0,
@@ -611,17 +594,15 @@ def test_sigma_anatomical_parameter_changes_weights(
     assert np.linalg.norm(res_narrow - res_wide) > 1e-3
 
 
-@pytest.mark.parametrize("backend", available_backends())
 def test_sigma_distance_parameter_requires_distance_weighting(
     geometry,
-    backend,
     anatomical_image_gradient,
     emission_random,
 ):
     # When distance weighting is disabled, sigma_dist should have no effect
     operator_no_dist = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.2,
         sigma_dist=0.1,
@@ -641,7 +622,7 @@ def test_sigma_distance_parameter_requires_distance_weighting(
     # With distance weighting enabled, sigma_dist must influence the kernel
     operator_dist = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.2,
         sigma_dist=0.1,
@@ -660,16 +641,14 @@ def test_sigma_distance_parameter_requires_distance_weighting(
     assert np.linalg.norm(res_dist_tight - res_dist_wide) > 1e-3
 
 
-@pytest.mark.parametrize("backend", available_backends())
 def test_sigma_emission_parameter_affects_hybrid_kernel(
     geometry,
-    backend,
     anatomical_image_gradient,
     emission_random,
 ):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.2,
         sigma_dist=1.0,
@@ -689,11 +668,10 @@ def test_sigma_emission_parameter_affects_hybrid_kernel(
     assert np.linalg.norm(res_emission_tight - res_emission_wide) > 1e-3
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_adjoint_with_all_features(geometry, backend):
+def test_adjoint_with_all_features(geometry):
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.4,
         sigma_dist=0.75,
@@ -724,12 +702,11 @@ def test_adjoint_with_all_features(geometry, backend):
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_precompute_anatomical_weights(geometry, backend):
+def test_precompute_anatomical_weights(geometry):
     """Test that anatomical weights are pre-computed and cached correctly."""
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -764,12 +741,11 @@ def test_precompute_anatomical_weights(geometry, backend):
     assert operator._anatomical_weights.shape == expected_shape
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_precomputed_weights_invalidation(geometry, backend):
+def test_precomputed_weights_invalidation(geometry):
     """Test that anatomical weights cache is invalidated when parameters change."""
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         use_mask=False,
@@ -797,12 +773,11 @@ def test_precomputed_weights_invalidation(geometry, backend):
     assert operator._anatomical_weights is None
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_precomputed_weights_with_mask(geometry, backend):
+def test_precomputed_weights_with_mask(geometry):
     """Test that anatomical weights are pre-computed correctly with masking."""
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         use_mask=True,
@@ -827,15 +802,14 @@ def test_precomputed_weights_with_mask(geometry, backend):
     assert np.any(weights > 0.0)
 
 
-@pytest.mark.parametrize("backend", available_backends())
-def test_adjoint_with_precomputed_anatomical_weights(geometry, backend):
+def test_adjoint_with_precomputed_anatomical_weights(geometry):
     """
     Test that the adjoint property holds when using pre-computed anatomical weights.
     This is critical because pre-computation changes the kernel implementation.
     """
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=5,
         sigma_anat=0.4,
         sigma_dist=0.75,
@@ -876,18 +850,17 @@ def test_adjoint_with_precomputed_anatomical_weights(geometry, backend):
     assert np.allclose(dot_forward, dot_adjoint, atol=1e-6, rtol=1e-5)
 
 
-@pytest.mark.parametrize("backend", available_backends())
 @pytest.mark.parametrize("use_mask", [True, False])
 @pytest.mark.parametrize("hybrid", [True, False])
 @pytest.mark.parametrize("distance_weighting", [True, False])
-def test_precomputed_weights_consistency(geometry, backend, use_mask, hybrid, distance_weighting):
+def test_precomputed_weights_consistency(geometry, use_mask, hybrid, distance_weighting):
     """
     Test that using pre-computed weights produces consistent results across multiple calls.
     The anatomical weights should be cached and reused, producing identical results.
     """
     operator = get_kernel_operator(
         geometry,
-        backend=backend,
+        backend="numba",
         num_neighbours=3,
         sigma_anat=0.5,
         sigma_dist=1.0,
@@ -1010,6 +983,82 @@ def test_validation_fails_before_compiled_kernel(geometry, monkeypatch):
         operator.direct(geometry.allocate(1.0))
 
 
+def test_base_operator_adjoint_not_implemented(geometry):
+    operator = BaseKernelOperator(geometry)
+
+    with pytest.raises(NotImplementedError, match="adjoint"):
+        operator.adjoint(geometry.allocate(1.0))
+
+
+@pytest.mark.parametrize("use_mask", [False, True])
+def test_inactive_sigma_values_do_not_change_results(
+    geometry,
+    anatomical_image_gradient,
+    emission_random,
+    use_mask,
+):
+    # sigma_dist is unused when distance_weighting is off and sigma_emission is
+    # unused when hybrid is off, so non-positive inactive values must be inert.
+    base_kwargs = dict(
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.2,
+        normalize_kernel=False,
+        use_mask=use_mask,
+        mask_k=10 if use_mask else None,
+        distance_weighting=False,
+        hybrid=False,
+    )
+    inactive_zero = get_kernel_operator(geometry, sigma_dist=0.0, sigma_emission=0.0, **base_kwargs)
+    inactive_zero.set_anatomical_image(anatomical_image_gradient)
+    inactive_positive = get_kernel_operator(geometry, sigma_dist=5.0, sigma_emission=5.0, **base_kwargs)
+    inactive_positive.set_anatomical_image(anatomical_image_gradient)
+
+    res_zero = inactive_zero.direct(emission_random).as_array()
+    res_positive = inactive_positive.direct(emission_random).as_array()
+
+    assert np.array_equal(res_zero, res_positive)
+
+    # Unlike the feature-gated sigmas, sigma_anat always feeds the anatomical
+    # weights, so it must stay strictly positive.
+    inactive_zero.set_parameters({"sigma_anat": 0.0})
+    with pytest.raises(ValueError, match="sigma_anat"):
+        inactive_zero.direct(emission_random)
+
+
+def test_enabling_feature_with_nonpositive_sigma_rejected_before_kernels(geometry, monkeypatch):
+    import krl.operators.kernel_operator as kernel_module
+
+    entered = []
+
+    def fail_if_called(*args, **kwargs):
+        entered.append(True)
+        raise AssertionError("compiled kernel was entered")
+
+    for name in (
+        "_nb_precompute_mask",
+        "_nb_precompute_anatomical_weights",
+        "_nb_precompute_anatomical_weights_mask",
+        "_nb_kernel_precomputed",
+        "_nb_kernel_precomputed_sparse",
+    ):
+        monkeypatch.setattr(kernel_module, name, fail_if_called)
+
+    distance_weighting = get_kernel_operator(
+        geometry, backend="numba", sigma_dist=0.0, distance_weighting=True
+    )
+    distance_weighting.set_anatomical_image(geometry.allocate(1.0))
+    with pytest.raises(ValueError, match="sigma_dist"):
+        distance_weighting.direct(geometry.allocate(1.0))
+    assert entered == []
+
+    hybrid = get_kernel_operator(geometry, backend="numba", sigma_emission=0.0, hybrid=True)
+    hybrid.set_anatomical_image(geometry.allocate(1.0))
+    with pytest.raises(ValueError, match="sigma_emission"):
+        hybrid.direct(geometry.allocate(1.0))
+    assert entered == []
+
+
 @pytest.mark.parametrize("num_neighbours", [0, 4, 3.5, True])
 def test_precompute_helpers_reject_invalid_neighbourhood(geometry, num_neighbours):
     operator = get_kernel_operator(geometry, backend="numba", num_neighbours=num_neighbours)
@@ -1100,15 +1149,30 @@ def test_directional_operator_scaled_out(geometry):
     component_b = make_image(geometry, np.random.default_rng(1).normal(size=geometry.shape))
     anatomical_gradient = BlockDataContainer(component_a, component_b)
 
-    operator = DirectionalOperator(anatomical_gradient, gamma=0.3, eta=0.1)
+    gamma, eta = 0.3, 0.1
+    operator = DirectionalOperator(anatomical_gradient, gamma=gamma, eta=eta)
     scaled = ScaledOperator(operator, 2.0)
 
     x = BlockDataContainer(component_a.clone(), component_b.clone())
+    x_arrays = [c.as_array().copy() for c in x.containers]
     out = x.clone()
     returned = scaled.direct(x, out=out)
 
     assert returned is out
 
-    expected = scaled.direct(x)
-    for result, reference in zip(out.containers, expected.containers):
-        assert np.allclose(result.as_array(), reference.as_array())
+    # Independent NumPy oracle: xi_c = grad_c / sqrt(sum_c grad_c**2 + eta**2),
+    # direct(x) = x - gamma * xi * <xi, x>, then the 2.0 scale factor.
+    grad_a, grad_b = component_a.as_array(), component_b.as_array()
+    xi_denom = np.sqrt(grad_a**2 + grad_b**2 + eta**2)
+    xi_a, xi_b = grad_a / xi_denom, grad_b / xi_denom
+    dot = xi_a * x_arrays[0] + xi_b * x_arrays[1]
+    expected = [
+        2.0 * (x_arrays[0] - gamma * xi_a * dot),
+        2.0 * (x_arrays[1] - gamma * xi_b * dot),
+    ]
+
+    for result, reference in zip(out.containers, expected):
+        assert np.allclose(result.as_array(), reference, atol=1e-12, rtol=1e-10)
+
+    for container, original in zip(x.containers, x_arrays):
+        assert np.array_equal(container.as_array(), original)
