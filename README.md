@@ -19,10 +19,16 @@ ecosystem (callbacks, functions, block operators, ...).
 
 ## Installation
 
-`cil-krl` is **not published on PyPI**, so `pip install cil-krl` does not work.
-Install CIL first — it is distributed via conda (conda-forge + ccpi channels),
-not PyPI — then install this package from a checkout or from a wheel you build
-yourself.
+Install CIL **first** — it is distributed via conda (conda-forge + ccpi
+channels), not PyPI, and is a separate package from `cil-krl`. Then install
+`cil-krl` from PyPI (the current release is 0.3.3):
+
+```bash
+pip install cil-krl
+```
+
+You can also install from a checkout or from a wheel you build yourself; see
+below.
 
 Combinations tested in CI:
 
@@ -42,7 +48,10 @@ tests are opt-in and skip without a GPU, so they are not covered by that gate.
 conda create -n krl -c conda-forge -c ccpi python=3.11 cil=26.0.0 pip
 conda activate krl
 
-# 2. Install cil-krl from a checkout
+# 2. Install cil-krl from PyPI
+pip install cil-krl
+
+# ...or from a checkout for development
 git clone https://github.com/samdporter/Kernel_RL.git && cd Kernel_RL
 pip install -e ".[dev]"      # + pytest, ruff
 # pip install -e ".[gpu]"    # optional: adds PyTorch for the torch backend
@@ -223,11 +232,6 @@ make build     # sdist + wheel
 GPU tests are opt-in via `KRL_RUN_GPU_TESTS=1`: `make gpu-test` runs the CUDA
 modules, while the MPS module is run explicitly (see
 [macOS / ARM](docs/MACOS-ARM.md)).
-
-The research pipelines, benchmark scripts and BrainWeb data preparation used in
-the original study live under [`examples/`](examples/README.md): they are
-historical reference material, not part of the installed package and not
-maintained.
 
 ## Documentation
 

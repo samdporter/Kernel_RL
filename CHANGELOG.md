@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `MAPRL` no longer attaches its own logging handler or reads a
+  `MAPRL_LOG_LEVEL` environment variable, so it follows the host application's
+  logging configuration. It also initialises the preconditioner image during
+  `__init__` when an initial line search is configured, so the first line search
+  uses the supplied preconditioner instead of an unset one.
+- `BaseKernelOperator.adjoint` now raises `NotImplementedError`; concrete
+  subclasses (numba and torch) provide the adjoint, rather than the base class
+  silently returning the forward result.
+- Removed dead `sigma_anat <= 0` branches from the torch kernel operator (a
+  non-positive `sigma_anat` is rejected by validation), and corrected the class
+  docstring to describe the on-the-fly anatomical-weight computation.
+
+### Changed
+- Documentation: `cil-krl` is now documented as published on PyPI (0.3.3) with
+  `pip install cil-krl`, while CIL itself remains a conda-only (non-PyPI)
+  prerequisite.
+- `master` is now a plugin-only checkout: the research pipelines, benchmark
+  scripts and BrainWeb data preparation have moved to the
+  `paper/brainweb-deconvolution` branch.
+
 ## [0.3.3] - 2026-10-09
 
 Metadata-only update; no code changes.

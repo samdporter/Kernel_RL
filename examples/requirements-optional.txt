@@ -1,9 +1,0 @@
-# Optional accelerator dependencies
-# These provide performance improvements but are not required
-
-# JIT compilation for kernel operators
-numba>=0.55
-
-# GPU acceleration for convolution and gradients (CUDA 11.8)
-torch>=2.0.0
-torchvision>=0.15.0
