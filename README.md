@@ -21,7 +21,7 @@ ecosystem (callbacks, functions, block operators, ...).
 
 Install CIL **first** — it is distributed via conda (conda-forge + ccpi
 channels), not PyPI, and is a separate package from `cil-krl`. Then install
-`cil-krl` from PyPI (the current release is 0.3.3):
+`cil-krl` from PyPI (the current release is 0.4.0):
 
 ```bash
 pip install cil-krl

@@ -48,8 +48,9 @@ def load_nifti_as_imagedata(filepath):
     Raises
     ------
     ValueError
-        If the file is not a 3-D volume or has a singleton axis; CIL cannot
-        represent size-1 dimensions (they are dropped or rejected).
+        If the file is not a 3-D volume, or has a singleton or zero-size
+        axis; CIL cannot represent such dimensions (they are dropped or
+        rejected).
     """
     nii = nib.load(str(filepath))
     data = nii.get_fdata().astype(np.float32)
@@ -58,6 +59,12 @@ def load_nifti_as_imagedata(filepath):
         raise ValueError(
             f"Unsupported NIfTI shape {data.shape} in {filepath}: "
             "only 3-D volumes can be converted to CIL ImageData"
+        )
+    if 0 in data.shape:
+        raise ValueError(
+            f"Unsupported NIfTI shape {data.shape} in {filepath}: "
+            "zero-size axes cannot be converted to CIL ImageData "
+            "(the container would have no voxels)"
         )
     if 1 in data.shape:
         raise ValueError(
@@ -118,6 +125,10 @@ def load_image(filepath):
 def save_image(image, filepath):
     """
     Save an image to file.
+
+    Only CIL ``ImageData`` is supported. A bare ``ndarray`` is not
+    special-cased: it is interpreted as CIL ``(z, y, x)`` ordering and thus
+    transposed to ``(x, y, z)`` on write.
 
     The file records voxel values and voxel spacing only; it does not preserve
     an original NIfTI affine or header.

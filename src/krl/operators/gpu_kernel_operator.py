@@ -218,12 +218,17 @@ class TorchKernelOperator(BaseKernelOperator):
 
         return mask_indices
 
+    @staticmethod
+    def _mask_index_dtype(n):
+        """Flat neighbour indices fit in int16 only while n³ stays within range."""
+        return torch.int16 if n ** 3 <= 32767 else torch.int32
+
     def _get_mask_cpu(self, force_recompute=False, dtype=None):
         """Ensure the sparse mask is available on CPU with the desired dtype."""
         if dtype is None:
             if torch is None:
                 raise RuntimeError("PyTorch is required for mask operations.")
-            dtype = torch.int16
+            dtype = self._mask_index_dtype(int(self.parameters["num_neighbours"]))
         if force_recompute or self._mask_cpu is None or self._mask_cpu.dtype != dtype:
             self.precompute_mask(dtype=dtype)
             if self._mask_cpu is None:
@@ -272,7 +277,7 @@ class TorchKernelOperator(BaseKernelOperator):
         anat_tensor = torch.from_numpy(arr).to(self.device)
 
         if use_mask:
-            mask_cpu = self._get_mask_cpu(dtype=torch.int16)
+            mask_cpu = self._get_mask_cpu(dtype=self._mask_index_dtype(n))
             weights = self._torch_precompute_anatomical_weights_sparse(
                 anat_tensor, mask_cpu, n, sigma_anat, sigma_dist, distance_weighting
             )
@@ -484,9 +489,10 @@ class TorchKernelOperator(BaseKernelOperator):
         s0, s1, s2 = anat_arr.shape
         half = n // 2
         total = n ** 3
+        index_dtype = self._mask_index_dtype(n)
 
         # Create output tensor for mask indices
-        mask_indices = torch.empty((s0, s1, s2, k_keep), dtype=torch.int16, device=self.device)
+        mask_indices = torch.empty((s0, s1, s2, k_keep), dtype=index_dtype, device=self.device)
 
         # Pad anatomical array for boundary handling (reflection)
         anat_padded = self._pad_reflect_inclusive(anat_arr, half)
@@ -521,7 +527,7 @@ class TorchKernelOperator(BaseKernelOperator):
             )
             best_idx = torch.zeros(
                 (batch_size_actual, s1, s2, k_keep),
-                dtype=torch.int16,
+                dtype=index_dtype,
                 device=self.device,
             )
 
@@ -562,7 +568,7 @@ class TorchKernelOperator(BaseKernelOperator):
                     combined_vals, k_keep, dim=-1, largest=False, sorted=True
                 )
                 best_vals = top_vals
-                best_idx = torch.gather(combined_idx, -1, top_pos).to(torch.int16)
+                best_idx = torch.gather(combined_idx, -1, top_pos).to(index_dtype)
 
             mask_indices[i_start:i_end, :, :, :] = best_idx
 
@@ -638,7 +644,9 @@ class TorchKernelOperator(BaseKernelOperator):
 
         # Use sparse or dense kernel based on masking
         if use_mask:
-            mask_cpu = self._get_mask_cpu(force_recompute=recalc_mask, dtype=torch.int16)
+            mask_cpu = self._get_mask_cpu(
+                force_recompute=recalc_mask, dtype=self._mask_index_dtype(n)
+            )
             res_tensor = self._torch_kernel_forward_sparse(
                 x_tensor,
                 ref_tensor,
@@ -707,7 +715,7 @@ class TorchKernelOperator(BaseKernelOperator):
         anat_arr : torch.Tensor
             Anatomical data (s0, s1, s2)
         mask_cpu : torch.Tensor
-            Sparse mask indices stored on CPU (s0, s1, s2, k) as int16
+            Sparse mask indices stored on CPU (s0, s1, s2, k) as int16 or int32
         norm_arr : torch.Tensor
             Normalization array (s0, s1, s2) or (1, 1, 1)
         n : int
@@ -982,7 +990,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
         # Use sparse or dense adjoint based on masking
         if p["use_mask"]:
-            mask_cpu = self._get_mask_cpu(dtype=torch.int16)
+            mask_cpu = self._get_mask_cpu(dtype=self._mask_index_dtype(n))
             res_tensor = self._torch_adjoint_sparse(
                 x_tensor,
                 ref_tensor,

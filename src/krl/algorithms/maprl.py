@@ -7,6 +7,11 @@ LOGGER = logging.getLogger(__name__)
 
 
 class MAPRL(Algorithm):
+    """MAPRL algorithm with EM-style updates and an Armijo line search.
+
+    ``eps_preconditioner`` is currently unused/reserved.
+    """
+
     def __init__(
         self,
         initial_estimate,
@@ -28,6 +33,10 @@ class MAPRL(Algorithm):
         eps_preconditioner=1e-6,
         **kwargs,
     ):
+        if not np.isfinite(relaxation_eta) or relaxation_eta < 0:
+            raise ValueError("relaxation_eta must be a finite non-negative number.")
+        if not np.isfinite(step_size) or step_size <= 0:
+            raise ValueError("step_size must be a finite positive number.")
         self.initial_estimate = initial_estimate
         self.initial_step_size = step_size
         self.relaxation_eta = relaxation_eta
@@ -39,7 +48,6 @@ class MAPRL(Algorithm):
         self.armijo_iterations = armijo_iterations
         self.armijo_update_initial = armijo_update_initial
         self.armijo_update_interval = armijo_update_interval
-        self._initial_loss = None
         self._current_step_size = step_size  # Track the current step size found by Armijo
         # Counts actual updates independently of CIL's reporting label so that
         # scheduling remains correct for any update_objective_interval.
@@ -72,7 +80,6 @@ class MAPRL(Algorithm):
             step, loss = self._armijo_initial_step(self.initial_step_size)
             self.initial_step_size = step
             self._current_step_size = step
-            self._initial_loss = loss
             LOGGER.info(
                 "MAPRL Armijo: accepted step %.4g (objective %.6g)",
                 step,
@@ -200,6 +207,8 @@ class MAPRL(Algorithm):
         step = float(suggested_step)
         last_step = step
         last_loss = reference_loss
+        best_step = None
+        best_loss = None
 
         for iteration in range(1, self.armijo_max_iter + 1):
             candidate = current - direction * step
@@ -216,6 +225,9 @@ class MAPRL(Algorithm):
                 return step, candidate_loss
             last_step = step
             last_loss = candidate_loss
+            if np.isfinite(candidate_loss) and (best_loss is None or candidate_loss < best_loss):
+                best_loss = candidate_loss
+                best_step = step
             step *= self.armijo_beta
             LOGGER.debug(
                 "MAPRL Armijo: iter %d rejected, new candidate step %.4g (objective %.6g)",
@@ -231,7 +243,13 @@ class MAPRL(Algorithm):
             last_step,
             last_loss,
         )
-        return last_step, last_loss
+        # Every candidate failed the sufficient-decrease test, so do not
+        # return a rejected step as accepted. If some candidate still did not
+        # worsen the reference loss, offer the best one; otherwise keep the
+        # suggested step so the constructor never seeds an uphill step.
+        if best_loss is not None and best_loss <= reference_loss:
+            return best_step, best_loss
+        return float(suggested_step), reference_loss
 
     def _armijo_step(self, suggested_step):
         """Perform Armijo line search and update self.x with the result."""
@@ -256,6 +274,8 @@ class MAPRL(Algorithm):
         step = float(suggested_step)
         last_step = step
         last_loss = reference_loss
+        best_step = None
+        best_loss = None
 
         for iteration in range(1, self.armijo_max_iter + 1):
             candidate = current - direction * step
@@ -273,6 +293,9 @@ class MAPRL(Algorithm):
                 return step, candidate_loss
             last_step = step
             last_loss = candidate_loss
+            if np.isfinite(candidate_loss) and (best_loss is None or candidate_loss < best_loss):
+                best_loss = candidate_loss
+                best_step = step
             step *= self.armijo_beta
             LOGGER.debug(
                 "MAPRL Armijo: iter %d rejected, new candidate step %.4g (objective %.6g)",
@@ -288,11 +311,16 @@ class MAPRL(Algorithm):
             last_step,
             last_loss,
         )
-        # Update self.x with the last tested step
-        self.x = current - direction * last_step
-        with np.errstate(invalid="ignore"):
-            self.x.maximum(0, out=self.x)
-        return last_step, last_loss
+        # An Armijo rejection means no candidate achieved the sufficient
+        # decrease test; never apply one whose loss is worse than the
+        # reference. Apply the best candidate only if it does not worsen the
+        # reference, otherwise leave self.x unchanged.
+        if best_loss is not None and best_loss <= reference_loss:
+            self.x = current - direction * best_step
+            with np.errstate(invalid="ignore"):
+                self.x.maximum(0, out=self.x)
+            return best_step, best_loss
+        return last_step, reference_loss
 
     def _evaluate_loss(self, x):
         return float(self.data_fidelity(x) + self.prior(x))

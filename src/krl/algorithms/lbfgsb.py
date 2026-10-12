@@ -72,6 +72,10 @@ class LBFGSBOptimizer:
       unpreconditioned optimiser.
     * ``m`` is fixed for the whole run; callables or state-dependent maps are
       out of scope.
+    * ``objective[0]``/``loss[0]`` is ``F(initial_estimate)`` evaluated before
+      the non-negativity bounds are applied, so with negative initial entries
+      the first recorded value may not correspond to the first iterate SciPy
+      visits.
     """
 
     def __init__(
@@ -162,6 +166,7 @@ class LBFGSBOptimizer:
     def run(self, iterations: int, callbacks: Optional[Iterable] = None, verbose: int = 0):
         """Execute the optimisation for a maximum number of iterations."""
         callbacks = list(callbacks) if callbacks else []
+        self.result = None
         self.iteration = 0
         self._objective = []
         self.loss = self._objective
@@ -173,6 +178,9 @@ class LBFGSBOptimizer:
 
         initial_obj = self._objective_from_array(x0)
         self._objective.append(initial_obj)
+
+        if iterations <= 0:
+            return self
 
         bounds = None
         if self.options.enforce_non_negativity:
@@ -206,7 +214,6 @@ class LBFGSBOptimizer:
             "maxls": self.options.max_linesearch,
             "ftol": self.options.ftol,
             "gtol": self.options.gtol,
-            "disp": verbose > 0,
         }
 
         self.result = minimize(
@@ -218,6 +225,13 @@ class LBFGSBOptimizer:
             callback=scipy_callback,
             options=options,
         )
+
+        if verbose > 0:
+            print(
+                f"L-BFGS-B: {self.result.message} "
+                f"(nit={self.result.nit}, nfev={self.result.nfev}, "
+                f"final objective={self.result.fun:.6g})"
+            )
 
         final_x = self._z_to_x(self.result.x)
         self.solution.fill(final_x.reshape(self.solution.shape))

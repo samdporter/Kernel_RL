@@ -111,7 +111,7 @@ jobs:
           print("cil-krl dist version:", metadata.version("cil-krl"))
           assert "site-packages" in krl.__file__, krl.__file__
           assert krl.__version__ == metadata.version("cil-krl")
-          assert metadata.distribution("cil-krl").entry_points == []
+          assert list(metadata.distribution("cil-krl").entry_points) == []
           PY
 
       - name: Check the sdist ships the example and run it outside the checkout

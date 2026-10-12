@@ -40,6 +40,11 @@ class GaussianBlurringOperator(LinearOperator):
         sigma = np.asarray(sigma, dtype=np.float64)
         if sigma.shape != (3,) or not np.all(np.isfinite(sigma)) or np.any(sigma <= 0.0):
             raise ValueError("sigma must contain three positive finite values.")
+        if getattr(domain_geometry, "channels", 1) != 1:
+            raise ValueError(
+                "GaussianBlurringOperator only supports single-channel 3-D volumes; "
+                f"the geometry has {domain_geometry.channels} channels."
+            )
 
         super().__init__(domain_geometry=domain_geometry,
                          range_geometry=domain_geometry)
@@ -67,7 +72,7 @@ class GaussianBlurringOperator(LinearOperator):
                             __import__(b)
                         backend = b
                         break
-                    except ImportError:
+                    except (ImportError, OSError, AttributeError):
                         continue
                 if backend == 'auto':
                     backend = 'scipy'
@@ -99,8 +104,23 @@ class GaussianBlurringOperator(LinearOperator):
         psf = np.exp(-0.5*d2)
         return psf/psf.sum()
 
-    def direct(self, x, out=None):
+    @staticmethod
+    def _as_volume(x):
         arr = x.as_array()
+        if arr.ndim != 3:
+            raise ValueError(
+                "GaussianBlurringOperator only supports single-channel 3-D volumes."
+            )
+        channels = getattr(getattr(x, "geometry", None), "channels", 1)
+        if channels != 1:
+            raise ValueError(
+                "GaussianBlurringOperator only supports single-channel 3-D volumes; "
+                f"the image geometry has {channels} channels."
+            )
+        return arr
+
+    def direct(self, x, out=None):
+        arr = self._as_volume(x)
         if   self.backend == 'torch':
             F = self.torch.nn.functional
             t = self.torch.tensor(arr, dtype=self.torch.float32
@@ -122,7 +142,7 @@ class GaussianBlurringOperator(LinearOperator):
         return out
 
     def adjoint(self, x, out=None):
-        arr = x.as_array()
+        arr = self._as_volume(x)
         if   self.backend == 'torch':
             F = self.torch.nn.functional
             t = self.torch.tensor(arr, dtype=self.torch.float32

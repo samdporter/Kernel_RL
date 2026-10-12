@@ -606,6 +606,217 @@ class TestNativeTorchHelperMath:
         np.testing.assert_allclose(result.cpu().numpy(), reference, rtol=1e-3, atol=1e-5)
 
 
+class TestSmallAcceptedSigmaNativeKernels:
+    """A sigma that passes the float32 underflow guard must not yield NaN.
+
+    The sigma used here is small enough to stress float32 but has a non-zero
+    float32 squared denominator, so validation accepts it. These run on the
+    torch CPU device with the private helpers (the public device="cpu" path
+    delegates to numba); the same kernels run on CUDA in production, though the
+    CUDA path itself remains unverified here.
+    """
+
+    SIGMA = 1e-20
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    def test_forward_native_kernels_finite(
+        self, small_geometry, anatomical_gradient, use_mask
+    ):
+        params = dict(
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            num_neighbours=3,
+            sigma_anat=self.SIGMA,
+            normalize_kernel=False,
+            use_mask=use_mask,
+            distance_weighting=False,
+            hybrid=False,
+        )
+        if use_mask:
+            params["mask_k"] = 10
+        op = get_kernel_operator(small_geometry, **params)
+        op.set_anatomical_image(anatomical_gradient)
+
+        # The guard must accept this sigma.
+        op._validate_sigmas()
+
+        anat = torch.from_numpy(
+            np.ascontiguousarray(op._validate_anatomical_image(), dtype=op.numpy_dtype)
+        ).to(op.device)
+        rng = np.random.default_rng(3)
+        x = torch.from_numpy(
+            np.ascontiguousarray(
+                rng.normal(size=small_geometry.shape).astype(np.float32),
+                dtype=op.numpy_dtype,
+            )
+        ).to(op.device)
+        norm = torch.zeros(x.shape, dtype=op.torch_dtype, device=op.device)
+
+        if use_mask:
+            mask = op._get_mask_cpu(dtype=torch.int16)
+            out = op._torch_kernel_forward_sparse(
+                x, x, anat, mask, norm, 3, self.SIGMA, 1.0, 0.5,
+                False, False, False,
+            )
+        else:
+            out = op._torch_kernel_forward_dense(
+                x, x, anat, norm, 3, self.SIGMA, 1.0, 0.5,
+                False, False, False,
+            )
+
+        assert torch.isfinite(out).all()
+
+
+class TestSparseMaskIndexDtype:
+    """Native sparse mask indices must widen past the int16 range.
+
+    ``_torch_precompute_mask`` stores flat indices into the n³ neighbourhood;
+    for ``num_neighbours >= 33`` that exceeds int16 (33³ = 35937), so the native
+    mask must be int32 or the indices wrap negative. Small neighbourhoods keep
+    int16 to avoid a memory regression. These exercise the native torch helpers
+    directly, since the public device="cpu" path delegates to numba.
+    """
+
+    LARGE_N = 33
+    LARGE_K = 20
+
+    @pytest.fixture(autouse=True)
+    def _single_threaded_torch(self):
+        # torch and numba both bundle libomp; the large tensors here segfault in
+        # torch's parallel kernels when both runtimes are loaded, so keep torch
+        # single-threaded for these tests.
+        previous = torch.get_num_threads()
+        torch.set_num_threads(1)
+        try:
+            yield
+        finally:
+            torch.set_num_threads(previous)
+
+    @staticmethod
+    def _make_ops(geometry, n, k, anat_arr):
+        torch_op = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            num_neighbours=n,
+            mask_k=k,
+            use_mask=True,
+            sigma_anat=0.5,
+        )
+        numba_op = get_kernel_operator(
+            geometry,
+            backend='numba',
+            num_neighbours=n,
+            mask_k=k,
+            use_mask=True,
+            sigma_anat=0.5,
+        )
+        torch_op.set_anatomical_image(DummyImage(anat_arr.astype(np.float32)))
+        numba_op.set_anatomical_image(DummyImage(anat_arr))
+        return torch_op, numba_op
+
+    @staticmethod
+    def _anat_tensor(op):
+        anat = op._validate_anatomical_image()
+        return torch.from_numpy(
+            np.ascontiguousarray(anat, dtype=op.numpy_dtype)
+        ).to(op.device)
+
+    def test_large_neighbourhood_mask_is_int32_and_in_range(self):
+        geometry = DummyGeometry((17, 17, 17))
+        n, k = self.LARGE_N, self.LARGE_K
+        rng = np.random.default_rng(0)
+        torch_op, _ = self._make_ops(
+            geometry, n, k, rng.normal(size=geometry.shape)
+        )
+
+        mask = torch_op._torch_precompute_mask(self._anat_tensor(torch_op), n, k)
+
+        assert mask.dtype == torch.int32
+        assert int(mask.min()) >= 0
+        assert int(mask.max()) < n ** 3
+
+    def test_small_neighbourhood_mask_stays_int16(self):
+        geometry = DummyGeometry((17, 17, 17))
+        n, k = 3, 10
+        rng = np.random.default_rng(0)
+        torch_op, _ = self._make_ops(
+            geometry, n, k, rng.normal(size=geometry.shape)
+        )
+
+        mask = torch_op._torch_precompute_mask(self._anat_tensor(torch_op), n, k)
+
+        assert mask.dtype == torch.int16
+        assert int(mask.max()) < n ** 3
+
+    def test_large_neighbourhood_sparse_forward_adjoint_match_numba(self):
+        geometry = DummyGeometry((17, 17, 17))
+        n, k = self.LARGE_N, self.LARGE_K
+        rng = np.random.default_rng(5)
+        torch_op, numba_op = self._make_ops(
+            geometry, n, k, rng.normal(size=geometry.shape)
+        )
+
+        data_rng = np.random.default_rng(11)
+        x_arr = data_rng.normal(size=geometry.shape).astype(np.float32)
+        y_arr = data_rng.normal(size=geometry.shape).astype(np.float32)
+
+        reference_forward = numba_op.direct(DummyImage(x_arr)).as_array()
+        reference_adjoint = numba_op.adjoint(DummyImage(y_arr)).as_array()
+
+        anat_tensor = self._anat_tensor(torch_op)
+        x_tensor = torch.from_numpy(
+            np.ascontiguousarray(x_arr, dtype=torch_op.numpy_dtype)
+        ).to(torch_op.device)
+        y_tensor = torch.from_numpy(
+            np.ascontiguousarray(y_arr, dtype=torch_op.numpy_dtype)
+        ).to(torch_op.device)
+        mask_cpu = torch_op._torch_precompute_mask(anat_tensor, n, k).cpu()
+
+        forward_norm = torch.zeros(
+            anat_tensor.shape, dtype=torch_op.torch_dtype, device=torch_op.device
+        )
+        forward = torch_op._torch_kernel_forward_sparse(
+            x_tensor,
+            x_tensor,
+            anat_tensor,
+            mask_cpu,
+            forward_norm,
+            n,
+            torch_op.parameters["sigma_anat"],
+            torch_op.parameters["sigma_dist"],
+            torch_op.parameters["sigma_emission"],
+            True,
+            False,
+            False,
+        )
+        np.testing.assert_allclose(
+            forward.cpu().numpy(), reference_forward, rtol=1e-3, atol=1e-5
+        )
+
+        adjoint_norm = torch.from_numpy(
+            np.ascontiguousarray(numba_op._normalisation_map, dtype=torch_op.numpy_dtype)
+        ).to(torch_op.device, dtype=torch_op.torch_dtype)
+        adjoint = torch_op._torch_adjoint_sparse(
+            y_tensor,
+            y_tensor,
+            anat_tensor,
+            mask_cpu,
+            adjoint_norm,
+            n,
+            torch_op.parameters["sigma_anat"],
+            torch_op.parameters["sigma_dist"],
+            torch_op.parameters["sigma_emission"],
+            False,
+            False,
+        )
+        np.testing.assert_allclose(
+            adjoint.cpu().numpy(), reference_adjoint, rtol=1e-3, atol=1e-5
+        )
+
+
 class TestNeighbourhoodKernelValidation:
     """The public neighbourhood_kernel entry point validates sigma_anat.
 

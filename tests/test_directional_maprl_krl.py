@@ -5,6 +5,8 @@ The operator and algorithm tests use real CIL containers (``ImageData`` and
 structures they use in production.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 from cil.framework import BlockDataContainer, ImageGeometry
@@ -94,6 +96,32 @@ def test_directional_operator_dot_resets_accumulator(directional_geometry):
         + block_a.containers[1].as_array() * block_b.containers[1].as_array()
     )
     assert np.allclose(dot_b, expected_b)
+
+
+@pytest.mark.parametrize("eta", [0.0, -0.5])
+def test_directional_operator_nonpositive_eta_warns(directional_geometry, eta):
+    """A non-positive explicit eta risks 0/0 NaN and must warn."""
+    anatomical = BlockDataContainer(
+        make_image(directional_geometry, [[1.0, 2.0], [0.0, 1.0]]),
+        make_image(directional_geometry, [[0.5, 0.5], [0.5, 0.5]]),
+    )
+
+    with pytest.warns(UserWarning, match="eta"):
+        DirectionalOperator(anatomical, gamma=0.3, eta=eta)
+
+
+def test_directional_operator_default_eta_does_not_warn(directional_geometry):
+    """The default eta=None derives a positive scale, so no warning is raised."""
+    anatomical = BlockDataContainer(
+        make_image(directional_geometry, [[1.0, 2.0], [0.0, 1.0]]),
+        make_image(directional_geometry, [[0.5, 0.5], [0.5, 0.5]]),
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        DirectionalOperator(anatomical, gamma=0.3)
+
+    assert [w for w in caught if issubclass(w.category, UserWarning) and "eta" in str(w.message)] == []
 
 
 class LinearGradientFunctional:

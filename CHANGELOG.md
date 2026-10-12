@@ -5,9 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-10-12
 
 ### Fixed
+- Numba normalised `adjoint` used a `norm_arr.shape[0] > 1` sentinel that
+  skipped the per-voxel normalisation when the first array dimension is 1; it
+  now uses the array size (matching the torch backend).
+- `backend='auto'` now also catches `OSError`/`AttributeError` from a broken
+  `import torch` and falls back to numba (kernel and blur operators).
+- `MAPRL` rejects a non-positive `step_size` or negative `relaxation_eta`
+  (which produced a negative step), never applies a candidate worse than the
+  reference after an exhausted Armijo search, and ignores non-finite trial
+  losses when selecting the best candidate.
+- `LBFGSBOptimizer.run(iterations<=0)` is now a true no-op and clears any
+  stale solver `result`.
+- Removed the invalid `disp` SciPy option from `LBFGSBOptimizer` (it emitted
+  an `OptimizeWarning` and made `verbose` a no-op); `verbose>0` now prints a
+  result summary.
+- The torch sparse mask uses `int32` when `n**3 > 32767` (previously `int16`
+  overflowed for `num_neighbours >= 33`).
+- `GaussianBlurringOperator` now validates single-channel 3-D input
+  (previously a 2-D multichannel image was silently convolved across
+  channels).
+- Sigma validation now also rejects values whose squared denominator
+  underflows in float32 (native torch would otherwise produce NaNs).
+- CI's wheel `entry_points` assertion is fixed for Python >= 3.12.
 - `MAPRL` no longer attaches its own logging handler or reads a
   `MAPRL_LOG_LEVEL` environment variable, so it follows the host application's
   logging configuration. It also initialises the preconditioner image during
@@ -21,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   docstring to describe the on-the-fly anatomical-weight computation.
 
 ### Changed
+- `SaveIterationCallback` docs now describe its actual save schedule;
+  `DirectionalOperator` warns on a non-positive `eta`; `utils` docs/errors
+  clarified; `pyproject.toml` uses SPDX `license = "MIT"` (setuptools >= 77).
 - Documentation: `cil-krl` is now documented as published on PyPI (0.3.3) with
   `pip install cil-krl`, while CIL itself must be installed separately first
   (conda or from source — it is not on PyPI).

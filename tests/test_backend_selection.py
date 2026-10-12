@@ -30,6 +30,19 @@ def torch_import_attempts(monkeypatch):
     return attempts
 
 
+@pytest.fixture
+def torch_import_oserror(monkeypatch):
+    """Simulate a broken torch install whose import raises OSError."""
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "torch" or name.startswith("torch."):
+            raise OSError("dlopen failed for torch")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+
 def test_macos_auto_kernel_uses_numba_without_torch(monkeypatch, torch_import_attempts):
     monkeypatch.setattr(platform, "system", lambda: "Darwin")
 
@@ -110,3 +123,23 @@ def test_linux_auto_blur_uses_torch_when_cuda_available(monkeypatch):
     operator = create_gaussian_blur((1.0, 1.0, 1.0), make_geometry())
 
     assert operator.backend == "torch"
+
+
+def test_linux_auto_kernel_falls_back_to_numba_on_broken_torch(
+    monkeypatch, torch_import_oserror
+):
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    operator = get_kernel_operator(make_geometry())
+
+    assert operator.backend == "numba"
+
+
+def test_linux_auto_blur_falls_back_to_numba_on_broken_torch(
+    monkeypatch, torch_import_oserror
+):
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+
+    operator = GaussianBlurringOperator((1.0, 1.0, 1.0), make_geometry())
+
+    assert operator.backend == "numba"

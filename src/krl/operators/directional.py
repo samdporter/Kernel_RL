@@ -1,9 +1,27 @@
+import warnings
+
 import numpy as np
 from cil.framework import BlockGeometry
 from cil.optimisation.operators import LinearOperator
 
 
 class DirectionalOperator(LinearOperator):
+    """
+    Projects out the component of the iterates along the anatomical gradient.
+
+    Parameters
+    ----------
+    anatomical_gradient : BlockDataContainer
+        Gradient components defining the direction field.
+    gamma : float, optional
+        Scale of the projection term.
+    eta : float, optional
+        Regularisation added in quadrature to the gradient magnitude. An
+        explicit value should be positive: ``eta = 0`` makes the normalisation
+        0/0 (NaN) wherever the anatomical gradient is zero, and a UserWarning
+        is issued for any ``eta <= 0``. The default ``None`` derives a
+        positive scale from the gradient percentiles and avoids the NaN risk.
+    """
 
     def __init__(self, anatomical_gradient, gamma = 1, eta=None):
 
@@ -36,6 +54,16 @@ class DirectionalOperator(LinearOperator):
                 if not np.isfinite(s) or s <= 0.0:
                     s = 1.0
             eta = _ALPHA * s
+        elif eta <= 0:
+            warnings.warn(
+                f"eta={eta!r} is not positive: eta=0 makes the direction "
+                "field normalisation 0/0 (NaN) wherever the anatomical "
+                "gradient is zero, and negative eta is not a meaningful "
+                "scale. The default eta=None computes a positive scale and "
+                "avoids the NaN risk.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         self.xi = self.anatomical_gradient/(self.anatomical_gradient.pnorm().power(2)+eta**2).sqrt()
 
@@ -55,6 +83,13 @@ class DirectionalOperator(LinearOperator):
         return self.direct(x, out)
 
     def dot(self, x, y):
+        """
+        Inner product of two block containers.
+
+        The returned container is an internal buffer reused by this operator:
+        it is overwritten by every subsequent ``dot`` call, so clone it if the
+        result must be kept.
+        """
         self.tmp.fill(0)
         for el_x, el_y in zip(x.containers, y.containers):
             self.tmp += el_x * el_y

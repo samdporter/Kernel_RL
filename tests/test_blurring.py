@@ -97,3 +97,44 @@ def test_sigma_validation(geometry, bad_sigma):
 def test_unknown_backend_raises(geometry):
     with pytest.raises(ValueError, match="not supported"):
         GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend="bogus")
+
+
+def test_multichannel_geometry_rejected_at_construction():
+    geometry = ImageGeometry(voxel_num_x=5, voxel_num_y=5, channels=3)
+    with pytest.raises(ValueError, match="single-channel 3-D volumes"):
+        GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend="numba")
+
+
+def test_two_dimensional_input_raises_clear_error():
+    geometry = ImageGeometry(voxel_num_x=5, voxel_num_y=5)
+    operator = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend="numba")
+    image = make_image(geometry, np.ones(geometry.shape))
+
+    with pytest.raises(ValueError, match="single-channel 3-D volumes"):
+        operator.direct(image)
+    with pytest.raises(ValueError, match="single-channel 3-D volumes"):
+        operator.adjoint(image)
+
+
+def test_multichannel_input_image_rejected_at_apply(geometry):
+    operator = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend="numba")
+    multichannel = ImageGeometry(
+        voxel_num_x=5, voxel_num_y=5, channels=3, dtype=np.float64
+    )
+    image = make_image(multichannel, np.ones(multichannel.shape))
+    assert image.as_array().ndim == 3
+
+    with pytest.raises(ValueError, match="single-channel 3-D volumes"):
+        operator.direct(image)
+    with pytest.raises(ValueError, match="single-channel 3-D volumes"):
+        operator.adjoint(image)
+
+
+def test_three_dimensional_image_still_works(geometry):
+    operator = GaussianBlurringOperator((1.0, 1.0, 1.0), geometry, backend="scipy")
+    data = np.indices(geometry.shape).sum(axis=0).astype(np.float64)
+    image = make_image(geometry, data)
+
+    result = operator.direct(image).as_array()
+    assert result.shape == geometry.shape
+    assert np.all(np.isfinite(result))
