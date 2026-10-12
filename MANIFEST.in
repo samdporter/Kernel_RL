@@ -1,0 +1,2 @@
+prune examples
+exclude tests/test_examples_*.py
