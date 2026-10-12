@@ -175,6 +175,11 @@ maprl.run(iterations=50)
 reconstruction = maprl.x
 ```
 
+The data fidelity above is a plain `L2NormSquared`, so the snippet is a
+prior-only illustration. A deconvolution demonstration must include the PSF:
+wrap the data fidelity in the blur operator, e.g.
+`data_fidelity=OperatorCompositionFunction(L2NormSquared(b=observed), blur_op)`.
+
 Since `xi` points across anatomical boundaries, the soft projection attenuates
 the component of `grad x` in that direction before the penalty is evaluated, so
 gradient components across anatomical boundaries are penalised less than

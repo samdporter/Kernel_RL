@@ -19,10 +19,16 @@ ecosystem (callbacks, functions, block operators, ...).
 
 ## Installation
 
-`cil-krl` is **not published on PyPI**, so `pip install cil-krl` does not work.
-Install CIL first — it is distributed via conda (conda-forge + ccpi channels),
-not PyPI — then install this package from a checkout or from a wheel you build
-yourself.
+Install CIL **first** — it is distributed via conda (conda-forge + ccpi
+channels), not PyPI, and is a separate package from `cil-krl`. Then install
+`cil-krl` from PyPI (the current release is 0.3.3):
+
+```bash
+pip install cil-krl
+```
+
+You can also install from a checkout or from a wheel you build yourself; see
+below.
 
 Combinations tested in CI:
 
@@ -225,13 +231,12 @@ modules, while the MPS module is run explicitly (see
 [macOS / ARM](docs/MACOS-ARM.md)).
 
 Research benchmark studies live under [`studies/`](studies/README.md) (branch
-`study-framework`): a config-driven, resumable framework for comparing RL
-deconvolution regularisation methods on simulated and patient data.
+`paper/brainweb-deconvolution`): a config-driven, resumable framework for
+comparing RL deconvolution regularisation methods on simulated and patient data.
 
 The research pipelines, benchmark scripts and BrainWeb data preparation used in
-the original study live under [`examples/`](examples/README.md): they are
-historical reference material, not part of the installed package and not
-maintained.
+these experiments live under [`examples/`](examples/README.md): this branch's
+experiment tooling, not part of the installed package.
 
 ## Documentation
 

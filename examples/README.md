@@ -1,13 +1,12 @@
 # Examples
 
-Historical research code and data-preparation pipelines from the KRL PET
-deconvolution study. They are **not part of the `cil-krl` package**, are not
-installed with it, and are not maintained — treat them as a reference for how
-the library was used in the original experiments rather than as runnable,
-turnkey examples. A few example entry points have targeted smoke tests under
-`tests/test_examples_*.py`; the remaining historical research scripts are
-unmaintained. They also expect the original study's data layout, configuration
-files and extra dependencies (matplotlib, PyTorch, BrainWeb, ...).
+Research code and data-preparation pipelines for the KRL PET deconvolution
+experiments on this branch. They are **not part of the `cil-krl` package** and
+are not installed with it — treat them as this branch's experiment tooling
+rather than as runnable, turnkey examples. A few example entry points have
+targeted smoke tests under `tests/test_examples_*.py`; the remaining scripts are
+not covered by those tests. They also expect the original study's data layout,
+configuration files and extra dependencies (matplotlib, PyTorch, BrainWeb, ...).
 
 | Path | Purpose |
 |------|---------|
@@ -22,7 +21,7 @@ files and extra dependencies (matplotlib, PyTorch, BrainWeb, ...).
 
 ## Pipeline entry point
 
-For reference, the historical entry point was:
+For reference, the entry point is:
 
 ```bash
 python examples/pipelines/run_deconv.py --help
