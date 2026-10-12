@@ -114,6 +114,29 @@ jobs:
           assert metadata.distribution("cil-krl").entry_points == []
           PY
 
+      - name: Check the sdist ships the example and run it outside the checkout
+        run: |
+          "$CIL_PYTHON" - <<'PY'
+          import glob
+          import tarfile
+
+          (sdist,) = glob.glob("dist/*.tar.gz")
+          names = tarfile.open(sdist).getnames()
+          for required in (
+              "examples/rl_krl_dtv.py",
+              "examples/README.md",
+              "tests/test_example_rl_krl_dtv.py",
+          ):
+              assert any(name.endswith(required) for name in names), (required, names)
+          print(f"{sdist}: {len(names)} entries, example and its test included")
+          PY
+          "$CIL_PYTHON" -c "import pytest" 2>/dev/null || "$CIL_PYTHON" -m pip install -q pytest
+          rm -rf "$RUNNER_TEMP/sdist-check"
+          mkdir -p "$RUNNER_TEMP/sdist-check"
+          tar -xzf dist/*.tar.gz -C "$RUNNER_TEMP/sdist-check"
+          cd "$RUNNER_TEMP/sdist-check"/*/
+          env -u KRL_RUN_GPU_TESTS "$CIL_PYTHON" -m pytest tests/test_example_rl_krl_dtv.py -v
+
   gpu-test:
     name: GPU tests (CUDA)
     runs-on: [self-hosted, gpu]
