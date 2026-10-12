@@ -175,6 +175,12 @@ maprl.run(iterations=50)
 reconstruction = maprl.x
 ```
 
+This example pairs the DTV prior with an identity-model L2 data term
+(`L2NormSquared(b=observed)`) that fits the estimate directly to the observed
+image; it does not model a PSF and is therefore not PSF-aware deconvolution.
+For a deconvolution demonstration, compose the fidelity with the blur operator,
+e.g. `OperatorCompositionFunction(L2NormSquared(b=observed), blur_op)`.
+
 Since `xi` points across anatomical boundaries, the soft projection attenuates
 the component of `grad x` in that direction before the penalty is evaluated, so
 gradient components across anatomical boundaries are penalised less than

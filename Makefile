@@ -27,10 +27,10 @@ gpu-test:
 	KRL_RUN_GPU_TESTS=1 $(PYTHON) -m pytest tests/test_gpu_kernel_operator.py tests/test_cuda_fallback.py
 
 lint:
-	$(PYTHON) -m ruff check src/ tests/
+	$(PYTHON) -m ruff check src/ tests/ examples/
 
 format:
-	$(PYTHON) -m ruff check src/ tests/ --fix
+	$(PYTHON) -m ruff check src/ tests/ examples/ --fix
 
 build:
 	uv build

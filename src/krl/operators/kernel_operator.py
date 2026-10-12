@@ -33,7 +33,7 @@ def get_kernel_operator(domain_geometry, backend="auto", **kwargs):
         Backend to use: 'auto', 'torch', or 'numba'
         - 'auto': On macOS resolve to numba; elsewhere try torch (GPU) first,
           falling back to numba (CPU)
-        - 'torch': Use PyTorch GPU backend (requires torch + CUDA)
+        - 'torch': Use PyTorch backend (requires torch; device resolves cuda → mps → cpu)
         - 'numba': Use Numba CPU backend
     **kwargs
         Additional parameters passed to the operator

@@ -5,14 +5,11 @@ enabling processing of large volumes (e.g., 256³) on consumer GPUs with limited
 
 Key features:
 - float32 precision (halves memory vs float64)
-- Sparse neighbor masking for efficiency
+- Sparse neighbor masking for efficiency; mask indices are cached on CPU and
+  transferred to the device in bounded batches, not kept resident on the GPU
 - On-the-fly anatomical weights computed in bounded batches (only the CPU-delegation path caches them)
 - Automatic device management
 - Compatible API with BaseKernelOperator
-
-Memory requirements for 256³ volumes:
-- Small config (n=5, k=20): ~3.6 GB (fits RTX 3060)
-- Medium config (n=7, k=48): ~8.8 GB (fits RTX 4090)
 """
 
 import numpy as np
@@ -51,8 +48,9 @@ class TorchKernelOperator(BaseKernelOperator):
         PyTorch device (GPU or CPU)
     torch_dtype : torch.dtype
         PyTorch data type
-    _mask_gpu : torch.Tensor
-        Sparse mask indices stored on GPU
+    _mask_gpu : torch.Tensor or None
+        Unused (always None); mask indices are cached on CPU (`_mask_cpu`) and
+        transferred to the device in batches
     """
 
     def __init__(self, domain_geometry, device='auto', dtype='float32', **kwargs):

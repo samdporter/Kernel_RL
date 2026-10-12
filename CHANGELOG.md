@@ -22,11 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Documentation: `cil-krl` is now documented as published on PyPI (0.3.3) with
-  `pip install cil-krl`, while CIL itself remains a conda-only (non-PyPI)
-  prerequisite.
+  `pip install cil-krl`, while CIL itself must be installed separately first
+  (conda or from source — it is not on PyPI).
 - `master` is now a plugin-only checkout: the research pipelines, benchmark
   scripts and BrainWeb data preparation have moved to the
   `paper/brainweb-deconvolution` branch.
+
+### Added
+- Maintained example `examples/rl_krl_dtv.py` comparing RL, KRL and
+  directional-TV-regularised RL (`RL-dTV`) on a synthetic phantom, with
+  `examples/README.md`, tests in `tests/test_example_rl_krl_dtv.py` and ruff
+  coverage of `examples/` in CI and the Makefile.
 
 ## [0.3.3] - 2026-10-09
 

@@ -52,7 +52,7 @@ jobs:
 
       - name: Lint
         run: |
-          "$CIL_PYTHON" -m ruff check src/ tests/
+          "$CIL_PYTHON" -m ruff check src/ tests/ examples/
 
       - name: Run CPU tests
         run: |

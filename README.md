@@ -150,6 +150,17 @@ Because `KernelOperator` is a plain CIL `LinearOperator`, you can also drop it
 into your own CIL compositions (`CompositionOperator`, custom `Function`s, ...)
 and drive it with any CIL algorithm.
 
+## Examples
+
+Beyond the quickstart above, [`examples/`](examples/) holds runnable scripts;
+see [examples/README.md](examples/README.md) for details. The main one,
+[`examples/rl_krl_dtv.py`](examples/rl_krl_dtv.py), compares RL, KRL and
+directional-TV-regularised RL (`RL-dTV`) on a synthetic phantom:
+
+```bash
+python examples/rl_krl_dtv.py
+```
+
 ## Backends
 
 | Backend | Used by | Hardware | Notes |
