@@ -42,11 +42,11 @@ from typing import Dict, Optional
 import re
 import cmasher
 
-# Configuration
-DATA_DIR = Path("/home/sam/working/others/Kjell/KRL/data")
-RESULTS_DIR = Path("/home/sam/working/others/Kjell/KRL/results")
-OUTPUT_DIR = Path("/home/sam/working/others/Kjell/KRL/poster_figures")
-OUTPUT_DIR.mkdir(exist_ok=True)
+# Configuration (defaults are relative to the checkout root)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
+RESULTS_DIR = REPO_ROOT / "results"
+OUTPUT_DIR = REPO_ROOT / "poster_figures"
 
 # ============================================================================
 # Method Selection for Figures
@@ -204,7 +204,6 @@ def find_reconstruction_file(result_dir: Path, iteration: int) -> Optional[Path]
 
     if available_files:
         # Extract iteration numbers from filenames
-        import re
         iter_files = []
         for f in available_files:
             # Try to extract iteration number from filename
@@ -1186,6 +1185,8 @@ if __name__ == "__main__":
     print("="*100)
     print("POSTER FIGURE GENERATION")
     print("="*100)
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     # Generate all figures and tables
     generate_figure1_spheres_overview()

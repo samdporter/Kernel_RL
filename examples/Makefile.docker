@@ -1,5 +1,7 @@
 .PHONY: help build start stop restart shell clean logs test test-cov format lint install
 
+# Historical research wrapper; see examples/docker/README.md.
+
 # Default target
 help:
 	@echo "KRL Docker Development Commands"
@@ -23,7 +25,7 @@ help:
 	@echo "  make format       - Format code with black"
 	@echo "  make lint         - Run linting (flake8)"
 	@echo ""
-	@echo "For more information, see DOCKER.md"
+	@echo "For more information, see examples/docker/README.md"
 
 # Build the Docker image
 build:
@@ -82,7 +84,3 @@ install:
 
 # Build and start in one command
 up: build start
-
-# Run the main deconvolution script
-run-deconv:
-	docker-compose exec krl python run_deconv.py --help

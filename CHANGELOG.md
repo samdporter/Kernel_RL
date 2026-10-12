@@ -14,12 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Kernel operator validation**: `num_neighbours` must be positive odd integer; `sigma_anat`, `sigma_dist`, `sigma_emission` must be non-negative.
 - **BrainWeb physical geometry**: `BrainWebDataset.voxel_mm` now reads voxel spacing from NIfTI affine; affine preserved on save/load. Runner lesion-mask truth-value error fixed.
 - **SIRF activity scale**: `simulate_inputs` records `scale` in manifest; contract test validates high-count invariance.
+- Repaired the historical example pipeline and scripts: the pipeline uses the package's `create_gaussian_blur` (dropping the CIL `BlurringOperator` fallback and its ineffective `--psf-kernel-size` option), sweeps import from `examples.pipelines` and run under the checkout root, the reconstruction wrapper delegates to the package `RichardsonLucy`, the benchmark script no longer imports torch at module import, the poster script uses checkout-relative output paths and creates them, and the BrainWeb runner makes the checkout root importable.
 
 ### Changed
 - Quarantined pre-fix local artifacts (`results/`, `plans/`, `data/brainweb/`, `data/patients/MK-H001/`) into `invalidated_2026-08-27/` with README. These must not be reused.
 - Added `tools/quarantine_invalidated_artifacts.sh` for idempotent quarantine.
 
 See `docs/superpowers/specs/2026-08-27-phase-0-2-3-readiness-fixes-design.md` for design.
+
+### Removed
+- `examples/pipelines/cli_utils.py`; the pipeline and sweep scripts no longer import it.
 
 ## [0.3.0] - 2026-10-09
 

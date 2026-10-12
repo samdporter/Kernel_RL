@@ -54,6 +54,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=3.0",
     "ruff>=0.4",
+    "PyYAML>=6",
 ]
 all = [
     "cil-krl[gpu,dev]",

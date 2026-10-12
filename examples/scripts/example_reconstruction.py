@@ -14,18 +14,19 @@ Make sure you have the required data in data/spheres/:
 """
 
 from pathlib import Path
-import matplotlib.pyplot as plt
+
 import numpy as np
 
 # Import KRL package
 from krl import (
-    get_kernel_operator,
-    create_gaussian_blur,
     DirectionalOperator,
+    create_gaussian_blur,
+    get_kernel_operator,
     load_image,
     save_image,
 )
 from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions
+from krl.algorithms.richardson_lucy import RichardsonLucy
 from krl.utils import get_array
 
 # Import CIL components
@@ -33,14 +34,12 @@ try:
     import cil.optimisation.functions as fn
     import cil.optimisation.operators as op
     from cil.optimisation.operators import GradientOperator
-    from cil.optimisation.utilities.callbacks import Callback
-    from cil.utilities.display import show2D
 except ImportError:
     raise ImportError(
         "CIL is required. Install with:\n"
         "  conda install -c conda-forge -c ccpi cil"
     )
-    
+
 ALGORITHMS_TO_RUN=["RL", "KRL", "HKRL", "DTV"]
 
 DATA_TYPE = "brain"  # Options: "spheres", "brain"
@@ -51,13 +50,15 @@ def fwhm_to_sigma(fwhm):
 
 
 def richardson_lucy(
-    observed, blur_op, 
-    iterations, *, 
+    observed, blur_op,
+    iterations, *,
     freeze_iteration=np.inf,
-    epsilon=1e-10, 
+    epsilon=1e-10,
     kernel_operator=None):
     """
     Richardson-Lucy deconvolution with optional kernel operator.
+
+    Thin wrapper around ``krl.algorithms.richardson_lucy.RichardsonLucy``.
 
     Parameters
     ----------
@@ -67,6 +68,9 @@ def richardson_lucy(
         Blurring operator (PSF)
     iterations : int
         Number of RL iterations
+    freeze_iteration : float
+        Freeze the kernel operator after this many updates. The default
+        (``np.inf``) and ``0`` both mean never freeze.
     epsilon : float
         Small value to avoid division by zero
     kernel_operator : LinearOperator, optional
@@ -74,55 +78,36 @@ def richardson_lucy(
 
     Returns
     -------
-    result : ImageData
-        Reconstructed image
+    latent : ImageData
+        Latent estimate ``x``; callers apply the kernel operator themselves
     objectives : list
-        Objective function values per iteration
+        One KL objective value per completed update
     """
     print(f"Running Richardson-Lucy for {iterations} iterations...")
 
-    # Compute sensitivity (normalization)
-    geometry = observed.geometry
-    sensitivity = geometry.allocate(value=1)
-    current = observed.clone()
+    # The package uses 0 for "never freeze"; np.inf is the historical default here.
+    if not np.isfinite(freeze_iteration):
+        freeze_iteration = 0
 
-    if kernel_operator is not None:
-        # KRL/HKRL mode: compose blur and kernel operators
-        effective_blur = op.CompositionOperator(blur_op, kernel_operator)
-        est_blur = effective_blur.direct(current)
-        sensitivity = effective_blur.adjoint(geometry.allocate(value=1))
-    else:
-        # Standard RL mode
-        effective_blur = blur_op
-        est_blur = effective_blur.direct(current)
-        
-    objective_values = []
+    rl = RichardsonLucy(
+        initial_estimate=observed,
+        blurring_operator=blur_op,
+        observed_data=observed,
+        kernel_operator=kernel_operator,
+        freeze_iteration=freeze_iteration,
+        epsilon=epsilon,
+    )
+    rl.run(iterations=iterations, verbose=1)
 
-    # RL iterations
-    for idx in range(iterations):
-        # RL update: x *= (A^T (y / Ax)) / sensitivity
-        current *= effective_blur.adjoint(observed / (est_blur + epsilon))
-        current /= (sensitivity + epsilon)
-
-        # Re-estimate
-        est_blur = effective_blur.direct(current)
-
-        # Compute objective (KL divergence)
-        obj = (est_blur - observed * (est_blur + epsilon).log()).sum()
-        objective_values.append(obj)
-
-        if (idx + 1) % 20 == 0:
-            print(f"  Iteration {idx+1}/{iterations}, objective: {obj:.2f}")
-            
-        if idx + 1 == freeze_iteration and kernel_operator is not None:
-            print(f"  Freezing kernel operator at iteration {idx+1}")
-            kernel_operator.freeze_emission_kernel = True
-
-    return current, objective_values
+    # CIL records an initial objective before the first update; the contract is
+    # one objective value per completed update.
+    return rl.x, rl.loss[1:]
 
 
 def main():
     """Run the example reconstruction pipeline."""
+
+    import matplotlib.pyplot as plt
 
     # ========== Configuration ==========
 
@@ -184,10 +169,9 @@ def main():
         print(f"   Anatomy shape: {anatomy.shape}")
     except FileNotFoundError as e:
         print(f"\nError: Could not find data files in {data_dir}")
-        print(f"Please ensure you have:")
+        print("Please ensure you have:")
         print(f"  - {emission_file}")
         print(f"  - {anatomy_file}")
-        print(f"\nYou may need to run setup_demo.py first or adjust the file paths.")
         return
 
     # ========== Create Operators ==========
@@ -201,7 +185,7 @@ def main():
         backend="auto"  # Auto-select best available backend
     )
     print(f"   Blur operator backend: {blur_op.backend}")
-    
+
     rl_result = None
     krl_result = None
     hkrl_result = None

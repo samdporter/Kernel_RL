@@ -1,6 +1,6 @@
 scenario: one_patient_multi_noise_levels
 out_root: data/brainweb/one_patient_multi_noise_levels
-patient_id: 7
+patient_id: 54
 mr_modality: T1
 fwhm_mm: 5.0
 noise_model: poisson

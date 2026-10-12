@@ -1,5 +1,6 @@
 #!/bin/bash
-# Quick start script for running KRL in Docker
+# Quick start script for running KRL in Docker.
+# Historical research wrapper; see examples/docker/README.md.
 
 set -e
 
@@ -63,12 +64,12 @@ Examples:
     $0 start                    # Start the container
     $0 shell                    # Get an interactive shell
     $0 exec pytest              # Run tests
-    $0 exec python run_deconv.py --help  # Run the main script
     $0 logs                     # View logs
     $0 stop                     # Stop the container
     $0 clean                    # Complete cleanup
 
-For more information, see DOCKER.md
+For more information, see examples/docker/README.md. The pipeline is run from a
+host checkout: python examples/pipelines/run_deconv.py --help
 EOF
 }
 

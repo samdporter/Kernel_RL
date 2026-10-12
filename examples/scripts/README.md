@@ -8,6 +8,10 @@ Executable scripts for experiments and examples.
 - **example_reconstruction.py**: Example reconstruction demo
 - **find_lowest_nrmse.py**: Find best parameters from sweep results
 
+The pipeline configuration no longer accepts `--psf-kernel-size`: the blur
+operator derives its PSF from `--fwhm`, so the option had no effect and was
+removed. Passing it now fails argument parsing.
+
 ## Benchmarking
 
 - **benchmark_kernel_performance.py**: Comprehensive performance benchmarking tool
@@ -17,19 +21,21 @@ Executable scripts for experiments and examples.
   - **Volume sizes**: 64³, 128³, 256³ (configurable)
   - **Metrics**: Forward/adjoint timing, precomputation, memory usage, speedups
 
-  **Basic usage:**
+  The scripts live under `examples/scripts/` and are run from the repository
+  root:
+
   ```bash
   # Run all benchmarks (CPU + GPU if available)
-  python scripts/benchmark_kernel_performance.py
+  python examples/scripts/benchmark_kernel_performance.py
 
   # Benchmark specific sizes
-  python scripts/benchmark_kernel_performance.py --sizes 64 128
+  python examples/scripts/benchmark_kernel_performance.py --sizes 64 128
 
   # GPU-only benchmarking (fast)
-  python scripts/benchmark_kernel_performance.py --gpu-only --sizes 256
+  python examples/scripts/benchmark_kernel_performance.py --gpu-only --sizes 256
 
   # Skip backup comparison (faster)
-  python scripts/benchmark_kernel_performance.py --skip-backup
+  python examples/scripts/benchmark_kernel_performance.py --skip-backup
   ```
 
   **Recent results:**

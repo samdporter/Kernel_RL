@@ -23,45 +23,17 @@ Run only the hybrid sweep on the spheres dataset::
 from __future__ import annotations
 
 import argparse
-import os
-import shutil
+import sys
 from dataclasses import replace
 from itertools import product
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Mapping, Tuple
 
-import sys
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-ENV_FLAG = "KRL_ENV_BOOTSTRAPPED"
-EXPECTED_ENV = "krl"
-
-
-def _ensure_environment() -> None:
-    """Re-exec under `mamba run -n krl` if we are outside the expected env."""
-    current_env = os.environ.get("CONDA_DEFAULT_ENV") or os.environ.get("MAMBA_DEFAULT_ENV")
-    if current_env == EXPECTED_ENV or os.environ.get(ENV_FLAG) == "1":
-        return
-
-    mamba = shutil.which("mamba")
-    if mamba is None:
-        raise SystemExit(
-            "This script must be executed within the 'krl' conda environment.\n"
-            "Please run: mamba run -n krl python scripts/run_deconv_sweeps.py ..."
-        )
-
-    os.environ[ENV_FLAG] = "1"
-    script = Path(__file__).resolve()
-    cmd = [mamba, "run", "-n", EXPECTED_ENV, "python", str(script), *sys.argv[1:]]
-    os.execvpe(cmd[0], cmd, os.environ)
-
-
-_ensure_environment()
-
-from krl.cli.config import KernelParameters, PipelineConfig
+from examples.pipelines.config import KernelParameters, PipelineConfig
 
 
 def _format_value(value) -> str:
@@ -103,7 +75,6 @@ DEFAULT_CONFIG = PipelineConfig(
     rl_iterations_kernel=100,
     dtv_iterations=500,
     step_size=1.0,
-    psf_kernel_size=5,
     use_uniform_initial=True,
 )
 
@@ -310,7 +281,7 @@ def main() -> None:
 
     run_pipeline = None
     if not args.dry_run:
-        from krl.cli.run_deconv import run_pipeline as _run_pipeline
+        from examples.pipelines.run_deconv import run_pipeline as _run_pipeline
 
         run_pipeline = _run_pipeline
 

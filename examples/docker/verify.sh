@@ -1,5 +1,6 @@
 #!/bin/bash
-# Verification script to check if the Docker environment is set up correctly
+# Verification script to check if the Docker environment is set up correctly.
+# Historical research wrapper; see examples/docker/README.md.
 
 echo "============================================"
 echo "KRL Docker Environment Verification"
@@ -100,5 +101,5 @@ echo "Verification Complete!"
 echo "============================================"
 echo ""
 echo "To run tests: pytest"
-echo "To run the main script: python run_deconv.py --help"
+echo "To run the pipeline from a host checkout: python examples/pipelines/run_deconv.py --help"
 echo ""

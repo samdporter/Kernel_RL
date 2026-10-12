@@ -1,5 +1,12 @@
 # Docker Guide
 
+> **Historical:** these Docker wrappers are legacy research tooling. The compose
+> file builds from and mounts the `examples/` directory, not a full repository
+> checkout, so the commands below predate the current package layout and are not
+> verified. For supported installation see the
+> [top-level README](../../README.md); to run the pipeline, use a host checkout
+> as described in [examples/README.md](../README.md).
+
 ## Quick Commands
 
 ```bash

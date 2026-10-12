@@ -37,6 +37,20 @@ def prepare_brainweb_pet_dataset(
       * Poisson noise: Y ~ Poisson(λ = poisson_scale * B), noisy = Y / poisson_scale (B = blurred PET).
       * Gaussian noise: N(0, σ²) added to B (σ = gaussian_sigma if given, else 0.05 * max(B)).
 
+    Known limitations (these are historical examples, NOT validated for
+    quantitative physical-geometry studies):
+      * Volumes stay on BrainWeb's native mMR grid (~2.03, 2.09, 2.09 mm).
+        voxel_size_mm (default 2 mm) does not resample them; it only controls
+        the NIfTI output spacing, the PSF voxel-size conversion and custom-lesion
+        coordinates, so built-in lesion geometry can be inconsistent with the
+        exported spacing.
+      * The local default_rng(seed) controls only the noise added here, and the
+        brainweb.seed() call controls built-in lesion randomness. Upstream
+        PET/MR generation is not controlled by either and may reuse previously
+        generated noisy volumes, so identical arguments/seed do NOT guarantee
+        identical complete datasets across cold caches or differing cache
+        histories; upstream generation is not reproducible across caches.
+
     Requirements: pip install brainweb nibabel scipy
     """
     import os, re
@@ -53,7 +67,6 @@ def prepare_brainweb_pet_dataset(
         raise ImportError("Please install SciPy for Gaussian blurring: pip install scipy") from e
 
     out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
 
     # -- helpers (kept local to honour single-function request) -----------------
@@ -94,10 +107,16 @@ def prepare_brainweb_pet_dataset(
     # -- download/list BrainWeb subjects (cached under ~/.brainweb) ------------
     files = brainweb.get_files()  # downloads if needed; returns list of subject_XX.bin.gz paths
     if subject_ids is not None:
-        subject_ids = set(int(s) for s in subject_ids)
-        files = [f for f in files if _subject_id_from_path(f) in subject_ids]
-        if not files:
-            raise ValueError("No matching BrainWeb subjects found for given subject_ids.")
+        requested = set(int(s) for s in subject_ids)
+        if not requested:
+            raise ValueError("subject_ids must contain at least one subject id.")
+        available = {_subject_id_from_path(f) for f in files}
+        missing = sorted(requested - available)
+        if missing:
+            raise ValueError(f"Requested BrainWeb subjects not in the catalogue: {missing}")
+        files = [f for f in files if _subject_id_from_path(f) in requested]
+
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # -- process each subject ---------------------------------------------------
     for f in files:

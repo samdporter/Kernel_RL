@@ -3,6 +3,10 @@
 data/*
 !data/README.md
 !data/spheres/
+# Python sources under examples/data/ are code, not data; raw data there stays ignored
+!examples/data/
+examples/data/*
+!examples/data/*.py
 results/
 tmp*.*s
 

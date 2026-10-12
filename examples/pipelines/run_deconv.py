@@ -26,7 +26,7 @@ try:
     from cil.framework import ImageData
     import cil.optimisation.functions as fn
     import cil.optimisation.operators as op
-    from cil.optimisation.operators import BlurringOperator, GradientOperator
+    from cil.optimisation.operators import GradientOperator
     from cil.optimisation.utilities.callbacks import Callback
     import cil.optimisation.algorithms as alg
     from cil.utilities.display import show2D
@@ -57,30 +57,6 @@ LOGGER = logging.getLogger(__name__)
 def fwhm_to_sigma(fwhm: Tuple[float, float, float]) -> Tuple[float, float, float]:
     scale = 1.0 / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     return tuple(value * scale for value in fwhm)
-
-
-def geometry_voxel_sizes(geometry) -> Tuple[float, float, float]:
-    """Return voxel sizes as (z, y, x) for a CIL ImageGeometry."""
-    return (
-        float(geometry.voxel_size_z),
-        float(geometry.voxel_size_y),
-        float(geometry.voxel_size_x),
-    )
-
-
-def psf(kernel_size: int, fwhm: Tuple[float, float, float], voxel_size: Tuple[float, float, float]) -> np.ndarray:
-    sigma = fwhm_to_sigma(fwhm)
-    sigma_voxels = [sigma[i] / voxel_size[i] for i in range(3)]
-    axes = [
-        np.linspace(-(kernel_size - 1) / 2.0, (kernel_size - 1) / 2.0, kernel_size)
-        for _ in range(3)
-    ]
-    gauss = [np.exp(-0.5 * ax**2 / sigma_voxels[i] ** 2) for i, ax in enumerate(axes)]
-    kernel = (
-        np.outer(gauss[0], gauss[1]).reshape(kernel_size, kernel_size, 1)
-        * gauss[2].reshape(1, 1, kernel_size)
-    )
-    return kernel / np.sum(kernel)
 
 
 def load_images(config: PipelineConfig) -> Dict[str, ImageData]:
@@ -138,20 +114,11 @@ def save_reference_figures(images: Mapping[str, ImageData], output_dir: Path, os
 
 def create_blurring_operator(config: PipelineConfig, emission: ImageData):
     """Create Gaussian blurring operator for PSF."""
-    try:
-        return create_gaussian_blur(
-            fwhm_to_sigma(config.fwhm),
-            emission.geometry,
-            backend="auto",
-        )
-    except (ImportError, AttributeError):
-        # Fallback to CIL's BlurringOperator
-        kernel = psf(
-            config.psf_kernel_size,
-            config.fwhm,
-            geometry_voxel_sizes(emission.geometry),
-        )
-        return BlurringOperator(kernel, emission)
+    return create_gaussian_blur(
+        fwhm_to_sigma(config.fwhm),
+        emission.geometry,
+        backend="auto",
+    )
 
 
 def prepare_kernel_operator(

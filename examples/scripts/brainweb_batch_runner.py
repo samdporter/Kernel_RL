@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 import argparse
 import json
+import sys
 from pathlib import Path
 
 # Optional YAML support
@@ -10,8 +12,12 @@ try:
 except Exception:
     yaml = None
 
-from examples.data.brainweb_phantoms import prepare_brainweb_pet_dataset
+# Make the checkout root importable so this file also runs as a plain script.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
+from examples.data.brainweb_phantoms import prepare_brainweb_pet_dataset
 
 # ------------------------------ Scenario runners -----------------------------
 

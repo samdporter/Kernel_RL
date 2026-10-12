@@ -54,8 +54,8 @@ class KernelParameters:
 class PipelineConfig:
     data_path: Path = Path("data")
     output_root: Path = Path("results")
-    emission_file: str = "OSEM_b1337_n5.hv"
-    guidance_file: str = "T1_b1337.hv"
+    emission_file: str = "OSEM_b1337_n5.nii.gz"
+    guidance_file: str = "T1_b1337.nii.gz"
     ground_truth_file: Optional[str] = None
     backend: str = "numba"
     show_plots: bool = False
@@ -84,7 +84,6 @@ class PipelineConfig:
     lbfgs_max_linesearch: int = 20
     lbfgs_ftol: float = 1e-8
     lbfgs_gtol: float = 1e-8
-    psf_kernel_size: int = 5
     fwhm: Tuple[float, float, float] = (6.0, 6.0, 6.0)
     save_first_n: int = 5
     use_uniform_initial: bool = False
@@ -143,7 +142,6 @@ class PipelineConfig:
         yield f"  lbfgs_max_linesearch: {self.lbfgs_max_linesearch}"
         yield f"  lbfgs_ftol: {self.lbfgs_ftol}"
         yield f"  lbfgs_gtol: {self.lbfgs_gtol}"
-        yield f"  psf_kernel_size: {self.psf_kernel_size}"
         yield f"  fwhm: {self.fwhm}"
         yield f"  use_uniform_initial: {self.use_uniform_initial}"
         yield "Kernel parameters:"
@@ -182,7 +180,6 @@ def parse_common_args(
     )
     parser.add_argument("--save-suffix", default=defaults.save_suffix)
     parser.add_argument("--fwhm", type=float, nargs=3, default=list(defaults.fwhm), metavar=("FX", "FY", "FZ"))
-    parser.add_argument("--psf-kernel-size", type=int, default=defaults.psf_kernel_size)
     parser.add_argument("--save-first-n", type=int, default=defaults.save_first_n, help="Save first N iterations before using interval")
     parser.add_argument("--use-uniform-initial", dest="use_uniform_initial", action="store_true", default=defaults.use_uniform_initial, help="Use uniform image as initial estimate instead of blurred image")
     parser.add_argument("--use-blurred-initial", dest="use_uniform_initial", action="store_false", help="Use blurred image as initial estimate (default)")
@@ -277,7 +274,6 @@ def parse_common_args(
         lbfgs_max_linesearch=getattr(args, "lbfgs_max_linesearch", defaults.lbfgs_max_linesearch),
         lbfgs_ftol=getattr(args, "lbfgs_ftol", defaults.lbfgs_ftol),
         lbfgs_gtol=getattr(args, "lbfgs_gtol", defaults.lbfgs_gtol),
-        psf_kernel_size=args.psf_kernel_size,
         fwhm=_tuple3(args.fwhm),
         save_first_n=args.save_first_n,
         use_uniform_initial=args.use_uniform_initial,

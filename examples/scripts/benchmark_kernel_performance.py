@@ -24,15 +24,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# Check for PyTorch
-try:
-    import torch
-    TORCH_AVAILABLE = True
-    CUDA_AVAILABLE = torch.cuda.is_available()
-except ImportError:
-    TORCH_AVAILABLE = False
-    CUDA_AVAILABLE = False
-
 
 @dataclass
 class DummyGeometry:
@@ -177,13 +168,9 @@ def time_kernel_operations(backend, shape=(64, 64, 64), n=7, k=48,
         result = operator.adjoint(emission)
     adjoint_time = (time.time() - start) / num_iterations
 
-    # Benchmark precomputation
-    if backend == 'torch':
-        operator._anatomical_weights_gpu = None
-        operator._mask_gpu = None
-    else:
-        operator._anatomical_weights = None
-        operator.mask = None
+    # Benchmark precomputation with a cold cache: reapplying the anatomical
+    # image invalidates the derived mask and weight state on every backend.
+    operator.set_anatomical_image(anat)
 
     start = time.time()
     weights = operator.precompute_anatomical_weights()
@@ -239,6 +226,16 @@ def print_speedup(baseline_name, optimized_name, baseline, optimized):
 
 
 def main():
+    # Probe torch here rather than at module level so importing this file
+    # (e.g. from tests) does not pull in torch.
+    try:
+        import torch
+        TORCH_AVAILABLE = True
+        CUDA_AVAILABLE = torch.cuda.is_available()
+    except ImportError:
+        TORCH_AVAILABLE = False
+        CUDA_AVAILABLE = False
+
     parser = argparse.ArgumentParser(description='Benchmark kernel operator performance')
     parser.add_argument('--sizes', type=int, nargs='+', default=[64, 128, 256],
                        help='Volume sizes to benchmark (e.g., 64 128 256)')
