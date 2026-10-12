@@ -52,6 +52,26 @@ class LBFGSBOptimizer:
         unregularised optimisation.
     options : LBFGSBOptions, optional
         Numerical options for the optimiser.
+    preconditioner : ImageData or ndarray, optional
+        Fixed positive diagonal ``m`` used as a change of variables
+        ``x = M z`` (``M = diag(m)``). Gradient descent then runs on
+        ``f̃(z) = F(M z)`` with ``∇_z f̃ = m ⊙ ∇F(M z)``; SciPy is never
+        given a preconditioner, the reparameterisation supplies it. ``None``
+        (the default) is the identity.
+
+    Notes
+    -----
+    Invariants maintained by the change of variables:
+
+    * ``objective``/``loss`` always record ``F(x)`` in image space (never
+      ``f̃(z)``), so histories are comparable across preconditioned and
+      unpreconditioned runs.
+    * ``solution`` remains an ``ImageData`` in image space with the initial
+      geometry and dtype.
+    * ``preconditioner=None`` is arithmetically identical to the
+      unpreconditioned optimiser.
+    * ``m`` is fixed for the whole run; callables or state-dependent maps are
+      out of scope.
     """
 
     def __init__(
@@ -60,6 +80,7 @@ class LBFGSBOptimizer:
         data_fidelity,
         prior=None,
         options: Optional[LBFGSBOptions] = None,
+        preconditioner=None,
         **kwargs,
     ) -> None:
         self.initial_estimate = initial_estimate.clone()
@@ -71,11 +92,45 @@ class LBFGSBOptimizer:
         self.result = None
 
         self._adapter = _ImageArrayAdapter(self._solution)
+        self.preconditioner = None
+        self._diag: Optional[np.ndarray] = None
+        self._configure_preconditioner(preconditioner)
         self._objective: List[float] = []
         self.loss = self._objective
         self._last_fun_value: Optional[float] = None
         self.iteration = 0
         self.configured = True
+
+    def _configure_preconditioner(self, preconditioner) -> None:
+        if preconditioner is None:
+            return
+        if not isinstance(preconditioner, (ImageData, np.ndarray)):
+            raise TypeError(
+                "preconditioner must be an ImageData, an ndarray, or None, "
+                f"got {type(preconditioner).__name__}"
+            )
+        if np.iscomplexobj(preconditioner):
+            raise ValueError("preconditioner must be real, got a complex dtype")
+        if isinstance(preconditioner, ImageData):
+            preconditioner = preconditioner.clone()
+            diag = _ImageArrayAdapter.image_to_array(preconditioner)
+        else:
+            preconditioner = np.array(preconditioner, dtype=np.float64, copy=True)
+            diag = preconditioner.ravel(order="C")
+        if preconditioner.shape != self._adapter.shape:
+            raise ValueError(
+                f"preconditioner shape {preconditioner.shape} does not match "
+                f"image shape {self._adapter.shape}"
+            )
+        if not np.all(np.isfinite(diag)):
+            raise ValueError("preconditioner contains non-finite entries")
+        if not np.all(diag > 0):
+            raise ValueError(
+                "preconditioner entries must be strictly positive "
+                f"(min={np.min(diag)}, max={np.max(diag)})"
+            )
+        self.preconditioner = preconditioner
+        self._diag = diag
 
     @property
     def solution(self) -> ImageData:
@@ -88,6 +143,21 @@ class LBFGSBOptimizer:
     @property
     def objective(self) -> List[float]:
         return self._objective
+
+    def _z_to_x(self, z: np.ndarray) -> np.ndarray:
+        if self._diag is None:
+            return z
+        return self._diag * z
+
+    def _x_to_z(self, x: np.ndarray) -> np.ndarray:
+        if self._diag is None:
+            return x
+        return x / self._diag
+
+    def _gradient_in_z(self, grad_x: np.ndarray) -> np.ndarray:
+        if self._diag is None:
+            return grad_x
+        return self._diag * grad_x
 
     def run(self, iterations: int, callbacks: Optional[Iterable] = None, verbose: int = 0):
         """Execute the optimisation for a maximum number of iterations."""
@@ -108,16 +178,17 @@ class LBFGSBOptimizer:
         if self.options.enforce_non_negativity:
             bounds = Bounds(lb=0, ub=np.inf)
 
-        def fun(x):
-            value = self._objective_from_array(x)
+        def fun(z):
+            value = self._objective_from_array(self._z_to_x(z))
             self._last_fun_value = value
             return value
 
-        def jac(x):
-            return self._gradient_from_array(x)
+        def jac(z):
+            return self._gradient_in_z(self._gradient_from_array(self._z_to_x(z)))
 
-        def scipy_callback(xk):
+        def scipy_callback(zk):
             self.iteration += 1
+            xk = self._z_to_x(zk)
             self.solution.fill(xk.reshape(self.solution.shape))
             if self.options.enforce_non_negativity:
                 with np.errstate(invalid="ignore"):
@@ -141,14 +212,14 @@ class LBFGSBOptimizer:
         self.result = minimize(
             fun=fun,
             jac=jac,
-            x0=x0,
+            x0=self._x_to_z(x0),
             method="L-BFGS-B",
             bounds=bounds,
             callback=scipy_callback,
             options=options,
         )
 
-        final_x = self.result.x
+        final_x = self._z_to_x(self.result.x)
         self.solution.fill(final_x.reshape(self.solution.shape))
         if self.options.enforce_non_negativity:
             with np.errstate(invalid="ignore"):
