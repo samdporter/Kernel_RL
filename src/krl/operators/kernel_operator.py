@@ -63,7 +63,7 @@ def get_kernel_operator(domain_geometry, backend="auto", **kwargs):
             try:
                 import torch
                 backend = "torch" if torch.cuda.is_available() else "numba"
-            except ImportError:
+            except (ImportError, OSError, AttributeError):
                 backend = "numba"
 
     if backend == 'torch':
@@ -104,10 +104,21 @@ class BaseKernelOperator(LinearOperator):
         self.set_norm(None)
 
     def set_parameters(self, parameters):
+        """Update operator parameters and invalidate derived state.
+
+        ``normalize_features`` only takes effect when the anatomical image is
+        set, so toggling it here has no effect on an already-set image.
+        """
         self.parameters.update(parameters)
         self._invalidate_derived_state()
 
     def set_anatomical_image(self, image):
+        """Set the anatomical image, applying ``normalize_features`` here.
+
+        Because normalisation happens at this point, toggling
+        ``normalize_features`` later via ``set_parameters`` does not re-process
+        an already-set image; call this method again to apply the new setting.
+        """
         if self.parameters["normalize_features"]:
             arr = get_array(image)
             std = arr.std()
@@ -184,6 +195,17 @@ class BaseKernelOperator(LinearOperator):
         value = float(value)
         if not np.isfinite(value) or value <= 0.0:
             raise ValueError(f"{name} must be a positive finite number.")
+        if 2.0 * value * value == 0.0:
+            raise ValueError(
+                f"{name}={value!r} is too small: 2*{name}*{name} underflows to "
+                "0.0 in double precision, which would produce all-NaN output."
+            )
+        if np.float32(2.0 * value * value) == 0.0:
+            raise ValueError(
+                f"{name}={value!r} is too small: 2*{name}*{name} underflows to "
+                "0.0 in single precision, which would produce all-NaN output "
+                "from the float32 torch kernels."
+            )
 
     def _validate_inputs(self, x):
         anat = self._validate_anatomical_image()
@@ -783,7 +805,7 @@ def _nb_adjoint_precomputed(
         for j in range(s1):
             for k in range(s2):
                 val = x_arr[i, j, k]
-                if norm_arr.shape[0] > 1:
+                if norm_arr.size > 1:
                     norm = norm_arr[i, j, k]
                     val = val / norm if norm > 1e-12 else 0.0
                 c_ref = ref_arr[i, j, k]
@@ -851,7 +873,7 @@ def _nb_adjoint_precomputed_sparse(
         for j in range(s1):
             for k_vox in range(s2):
                 val = x_arr[i, j, k_vox]
-                if norm_arr.shape[0] > 1:
+                if norm_arr.size > 1:
                     norm = norm_arr[i, j, k_vox]
                     val = val / norm if norm > 1e-12 else 0.0
                 c_ref = ref_arr[i, j, k_vox]

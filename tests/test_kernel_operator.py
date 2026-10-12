@@ -943,7 +943,7 @@ def test_reflection_radius_larger_than_volume_rejected():
         operator.direct(small_geometry.allocate(1.0))
 
 
-@pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf])
+@pytest.mark.parametrize("sigma", [0.0, -1.0, np.nan, np.inf, 1e-170])
 def test_invalid_sigma_anat_rejected(geometry, sigma):
     operator = get_kernel_operator(geometry, backend="numba", sigma_anat=sigma)
     operator.set_anatomical_image(geometry.allocate(1.0))
@@ -966,6 +966,54 @@ def test_invalid_sigma_dist_rejected(geometry):
 
     with pytest.raises(ValueError, match="sigma_dist"):
         operator.direct(geometry.allocate(1.0))
+
+
+@pytest.mark.parametrize("sigma", [1e-30, 1e-25])
+def test_sigma_anat_underflowing_float32_rejected(geometry, sigma):
+    """A sigma whose squared denominator underflows in float32 must be rejected
+    even though it is representable in float64."""
+    operator = get_kernel_operator(geometry, backend="numba", sigma_anat=sigma)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_anat"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_sigma_dist_underflowing_float32_rejected(geometry):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        sigma_anat=0.5,
+        sigma_dist=1e-30,
+        distance_weighting=True,
+    )
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_dist"):
+        operator.direct(geometry.allocate(1.0))
+
+
+def test_sigma_emission_underflowing_float32_rejected(geometry):
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        sigma_anat=0.5,
+        sigma_emission=1e-30,
+        hybrid=True,
+    )
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    with pytest.raises(ValueError, match="sigma_emission"):
+        operator.direct(geometry.allocate(1.0))
+
+
+@pytest.mark.parametrize("sigma", [0.1, 1.0])
+def test_normal_sigmas_still_accepted(geometry, sigma):
+    operator = get_kernel_operator(geometry, backend="numba", sigma_anat=sigma, use_mask=False)
+    operator.set_anatomical_image(geometry.allocate(1.0))
+
+    result = operator.direct(geometry.allocate(1.0))
+    assert np.all(np.isfinite(result.as_array()))
 
 
 def test_validation_fails_before_compiled_kernel(geometry, monkeypatch):
@@ -1176,3 +1224,65 @@ def test_directional_operator_scaled_out(geometry):
 
     for container, original in zip(x.containers, x_arrays):
         assert np.array_equal(container.as_array(), original)
+
+
+class DummyGeometry:
+    """Minimal duck-typed geometry for volumes with a singleton first axis.
+
+    CIL's ImageGeometry drops size-1 dimensions, so it cannot represent the
+    (1, s1, s2) shapes that exercise the adjoint normalisation sentinel.
+    """
+
+    def __init__(self, shape):
+        self.shape = tuple(shape)
+
+    def allocate(self, value=0.0):
+        return DummyImage(np.full(self.shape, value, dtype=np.float64))
+
+
+class DummyImage:
+    def __init__(self, data):
+        self._data = np.asarray(data, dtype=np.float64)
+
+    @property
+    def shape(self):
+        return self._data.shape
+
+    def as_array(self):
+        return self._data
+
+    def clone(self):
+        return DummyImage(self._data.copy())
+
+    def fill(self, values):
+        self._data[...] = np.asarray(values, dtype=np.float64)
+
+
+def test_adjoint_dot_product_singleton_first_dimension():
+    """Regression: the adjoint normalisation sentinel must key off the number
+    of elements, not the first dimension. On a (1, s1, s2) volume shape[0] is 1
+    even though the normalisation map is fully populated, which previously made
+    the adjoint skip dividing by the per-voxel weight sum."""
+    geometry = DummyGeometry((1, 5, 5))
+    operator = get_kernel_operator(
+        geometry,
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.5,
+        normalize_features=False,
+        normalize_kernel=True,
+        use_mask=False,
+    )
+    rng = np.random.default_rng(123)
+    operator.set_anatomical_image(DummyImage(rng.normal(size=(1, 5, 5))))
+
+    x = DummyImage(rng.normal(size=(1, 5, 5)))
+    y = DummyImage(rng.normal(size=(1, 5, 5)))
+
+    forward = operator.direct(x).as_array()
+    adjoint = operator.adjoint(y).as_array()
+
+    lhs = float(np.sum(forward * y.as_array()))
+    rhs = float(np.sum(x.as_array() * adjoint))
+    denom = max(abs(lhs), abs(rhs), 1.0)
+    assert abs(lhs - rhs) / denom < 1e-12

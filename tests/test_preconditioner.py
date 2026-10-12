@@ -48,6 +48,33 @@ class QuadraticFunctional:
         return 0.5 * float(np.sum(diff ** 2))
 
 
+class NaNFirstTrialFunctional:
+    """Functional whose first Armijo trial lands on a non-finite loss.
+
+    A constant gradient of -1 and ``eps=0`` make the trial points ``1 + step``
+    for an initial estimate of 1. ``nan_value`` yields NaN, ``finite_value``
+    yields ``finite_loss`` and any other point yields 1.0 (the reference).
+    """
+
+    def __init__(self, nan_value, finite_value, finite_loss):
+        self.nan_value = nan_value
+        self.finite_value = finite_value
+        self.finite_loss = finite_loss
+
+    def gradient(self, x):
+        image = x.geometry.allocate(0.0, dtype=np.float64)
+        image.fill(-1.0)
+        return image
+
+    def __call__(self, x):
+        arr = x.as_array()
+        if np.allclose(arr, self.nan_value):
+            return np.nan
+        if np.allclose(arr, self.finite_value):
+            return self.finite_loss
+        return 1.0
+
+
 class RecordingMAPRL(MAPRL):
     """MAPRL that records every preconditioner refresh via actual update count."""
 
@@ -489,4 +516,187 @@ def test_constructor_leaves_lazy_preconditioner_untouched(geometry):
 
     assert calls == []
     assert maprl._preconditioner_image is None
+
+
+def test_armijo_rejection_does_not_move_to_worse_point(geometry):
+    """A failed in-run line search must not apply the rejected candidate.
+
+    With a 10x preconditioner every backtrack from x=1 is uphill, so the
+    Armijo search finds no acceptable step and ``x`` must be left unchanged.
+    """
+    initial = make_image(geometry, 1.0)
+    data_fidelity = QuadraticFunctional(make_image(geometry, 2.0))
+    prior = ConstantFunctional(0.0, 1.0)
+
+    maprl = MAPRL(
+        initial_estimate=initial,
+        data_fidelity=data_fidelity,
+        prior=prior,
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=False,
+        armijo_beta=0.75,
+        armijo_sigma=1e-1,
+        armijo_max_iter=1,
+        armijo_iterations=25,
+        preconditioner=make_image(geometry, 10.0),
+        preconditioner_update_initial=1,
+    )
+
+    reference_loss = data_fidelity(initial) + prior(initial)
+    maprl.run(iterations=1, verbose=0)
+
+    assert np.allclose(maprl.x.as_array(), initial.as_array())
+    assert data_fidelity(maprl.x) + prior(maprl.x) <= reference_loss
+    assert maprl._current_step_size == pytest.approx(1.0)
+
+
+def test_initial_armijo_rejection_does_not_seed_rejected_step(geometry):
+    """The constructor must not adopt a rejected backtrack as its initial step.
+
+    Two backtracks (1.0 and 0.75) are tried and both are uphill, so the
+    constructor should keep the suggested step rather than the last rejected
+    one.
+    """
+    initial = make_image(geometry, 1.0)
+    data_fidelity = QuadraticFunctional(make_image(geometry, 2.0))
+    prior = ConstantFunctional(0.0, 1.0)
+
+    maprl = MAPRL(
+        initial_estimate=initial,
+        data_fidelity=data_fidelity,
+        prior=prior,
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=True,
+        armijo_beta=0.75,
+        armijo_sigma=1e-1,
+        armijo_max_iter=2,
+        preconditioner=make_image(geometry, 10.0),
+    )
+
+    reference_loss = data_fidelity(initial) + prior(initial)
+
+    assert maprl.initial_step_size == pytest.approx(1.0)
+    assert maprl._current_step_size == pytest.approx(1.0)
+    assert np.allclose(maprl.x.as_array(), initial.as_array())
+    assert data_fidelity(maprl.x) + prior(maprl.x) <= reference_loss
+
+
+def test_armijo_accepts_improving_candidate(geometry):
+    """A candidate satisfying the Armijo test is still applied."""
+    initial = make_image(geometry, 1.0)
+    data_fidelity = QuadraticFunctional(make_image(geometry, 2.0))
+    prior = ConstantFunctional(0.0, 1.0)
+
+    maprl = MAPRL(
+        initial_estimate=initial,
+        data_fidelity=data_fidelity,
+        prior=prior,
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=False,
+        armijo_beta=0.5,
+        armijo_sigma=1e-1,
+        armijo_max_iter=20,
+        armijo_iterations=25,
+    )
+
+    maprl.run(iterations=1, verbose=0)
+
+    assert maprl._current_step_size == pytest.approx(1.0)
+    assert np.allclose(maprl.x.as_array(), 2.0)
+    assert data_fidelity(maprl.x) + prior(maprl.x) < data_fidelity(initial) + prior(initial)
+
+
+def test_armijo_skips_nan_trial_and_applies_finite_candidate(geometry):
+    """A non-finite first trial must not mask a later usable candidate.
+
+    Trial 1 (step 1.0) lands on NaN; trial 2 (step 0.5) lands on a finite loss
+    that beats the reference but misses the Armijo margin. The finite trial
+    must be applied rather than discarded because NaN was tracked as best.
+    """
+    data_fidelity = NaNFirstTrialFunctional(nan_value=2.0, finite_value=1.5, finite_loss=0.5)
+    prior = ConstantFunctional(0.0, 0.0)
+
+    maprl = MAPRL(
+        initial_estimate=make_image(geometry, 1.0),
+        data_fidelity=data_fidelity,
+        prior=prior,
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=False,
+        armijo_beta=0.5,
+        armijo_sigma=1e-1,
+        armijo_max_iter=2,
+        armijo_iterations=25,
+    )
+
+    maprl.run(iterations=1, verbose=0)
+
+    assert maprl._current_step_size == pytest.approx(0.5)
+    assert np.allclose(maprl.x.as_array(), 1.5)
+    assert data_fidelity(maprl.x) == pytest.approx(0.5)
+
+
+def test_initial_armijo_skips_nan_trial_and_applies_finite_candidate(geometry):
+    """The constructor's initial search must also skip a non-finite trial."""
+    data_fidelity = NaNFirstTrialFunctional(nan_value=2.0, finite_value=1.5, finite_loss=0.5)
+    prior = ConstantFunctional(0.0, 0.0)
+
+    maprl = MAPRL(
+        initial_estimate=make_image(geometry, 1.0),
+        data_fidelity=data_fidelity,
+        prior=prior,
+        step_size=1.0,
+        eps=0.0,
+        initial_line_search=True,
+        armijo_beta=0.5,
+        armijo_sigma=1e-1,
+        armijo_max_iter=2,
+    )
+
+    assert maprl.initial_step_size == pytest.approx(0.5)
+    assert maprl._current_step_size == pytest.approx(0.5)
+    assert np.allclose(maprl.x.as_array(), 1.0)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"relaxation_eta": -0.01},
+        {"relaxation_eta": np.nan},
+        {"relaxation_eta": np.inf},
+        {"step_size": 0.0},
+        {"step_size": -1.0},
+        {"step_size": np.inf},
+    ],
+)
+def test_maprl_rejects_invalid_step_parameters(geometry, kwargs):
+    """A negative relaxation_eta makes the decay denominator cross zero and
+    step_size() return a negative step, so both parameters must be validated."""
+    with pytest.raises(ValueError):
+        make_maprl(geometry, **kwargs)
+
+
+def test_maprl_positive_relaxation_eta_keeps_step_non_negative(geometry):
+    maprl = make_maprl(geometry, step_size=1.0, relaxation_eta=0.01)
+
+    steps = []
+    original_step_size = MAPRL.step_size
+
+    def tracked_step_size(self):
+        value = original_step_size(self)
+        steps.append(value)
+        return value
+
+    MAPRL.step_size = tracked_step_size
+
+    try:
+        maprl.run(iterations=100, verbose=0)
+    finally:
+        MAPRL.step_size = original_step_size
+
+    assert steps
+    assert all(step >= 0.0 for step in steps)
 

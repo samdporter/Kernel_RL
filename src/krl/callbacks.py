@@ -125,7 +125,9 @@ class SaveIterationCallback(Callback):
     kernel_operator : LinearOperator, optional
         If provided, apply this operator to the solution before saving
     save_first_n : int, optional
-        Save the first N iterations (default: 5, non-negative integer)
+        Save the initial iteration and the first ``save_first_n`` updates,
+        i.e. iterations 0..save_first_n (default: 5, non-negative integer).
+        Every later iteration that is a multiple of ``interval`` is also saved.
     """
 
     def __init__(
@@ -152,10 +154,10 @@ class SaveIterationCallback(Callback):
 
     def __call__(self, algorithm: Algorithm) -> None:
         """Save current solution at specified intervals."""
-        # Save first N iterations (1, 2, 3, 4, 5)
+        # Save the initial iteration and the first N updates (0, 1, ..., save_first_n)
         if algorithm.iteration <= self.save_first_n:
             should_save = True
-        # Then save at regular intervals (10, 20, 30...)
+        # Then save every interval-th iteration (10, 20, 30...)
         elif algorithm.iteration % self.interval == 0:
             should_save = True
         else:

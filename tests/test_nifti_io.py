@@ -188,5 +188,18 @@ def test_load_rejects_singleton_axes(shape, tmp_path):
         load_image(_write_nifti(tmp_path, shape))
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [(0, 12, 10), (10, 0, 10), (10, 12, 0)],
+    ids=["empty-z", "empty-y", "empty-x"],
+)
+def test_load_rejects_zero_size_axes(shape, tmp_path):
+    """Zero-size axes cannot be converted to a CIL ImageData either."""
+    from krl.utils import load_image
+
+    with pytest.raises(ValueError, match="zero-size axes"):
+        load_image(_write_nifti(tmp_path, shape))
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

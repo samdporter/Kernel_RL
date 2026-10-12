@@ -1,9 +1,12 @@
 """Tests for the L-BFGS-B optimiser and its ImageData/array adapter."""
 
+import warnings
+
 import numpy as np
 import pytest
 from cil.framework import ImageGeometry
 from cil.optimisation.functions import L2NormSquared
+from scipy.optimize import OptimizeWarning
 
 from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions, _ImageArrayAdapter
 
@@ -330,3 +333,93 @@ def test_preconditioner_rejects_complex():
                 data_fidelity=L2NormSquared(b=initial),
                 preconditioner=preconditioner,
             )
+
+
+@pytest.mark.parametrize("iterations", [0, -1])
+def test_nonpositive_iterations_perform_no_step(iterations):
+    """SciPy treats maxiter=0 as one iteration, so run(<=0) must short-circuit."""
+    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=2, dtype=np.float64)
+    initial = make_image(geometry, np.full(geometry.shape, 0.5))
+    target = make_image(geometry, np.full(geometry.shape, 1.5))
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=initial,
+        data_fidelity=L2NormSquared(b=target),
+    )
+
+    calls = []
+    optimizer.run(iterations=iterations, callbacks=[calls.append], verbose=0)
+
+    assert np.array_equal(optimizer.solution.as_array(), initial.as_array())
+    assert optimizer.objective == [float(L2NormSquared(b=target)(initial))]
+    assert calls == []
+
+
+def test_zero_iteration_run_after_valid_run_clears_result():
+    geometry = ImageGeometry(voxel_num_x=8, voxel_num_y=8, voxel_num_z=2, dtype=np.float64)
+    target = make_image(geometry, np.random.default_rng(0).uniform(1.0, 2.0, geometry.shape))
+    initial = make_image(geometry, np.full(geometry.shape, 0.5))
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=initial,
+        data_fidelity=L2NormSquared(b=target),
+    )
+    optimizer.run(iterations=20, verbose=0)
+    assert optimizer.result is not None
+
+    optimizer.run(iterations=0, verbose=0)
+
+    assert optimizer.result is None
+    assert np.array_equal(optimizer.solution.as_array(), initial.as_array())
+    assert optimizer.objective == [float(L2NormSquared(b=target)(initial))]
+
+
+def test_normal_run_sets_result_matching_solution():
+    geometry = ImageGeometry(voxel_num_x=8, voxel_num_y=8, voxel_num_z=2, dtype=np.float64)
+    target = make_image(geometry, np.random.default_rng(0).uniform(1.0, 2.0, geometry.shape))
+    initial = make_image(geometry, np.full(geometry.shape, 0.5))
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=initial,
+        data_fidelity=L2NormSquared(b=target),
+    )
+    optimizer.run(iterations=5, verbose=0)
+
+    assert optimizer.result is not None
+    assert np.allclose(
+        optimizer.solution.as_array(),
+        optimizer.result.x.reshape(geometry.shape),
+        rtol=1e-12,
+        atol=1e-12,
+    )
+    assert optimizer.result.fun == pytest.approx(optimizer.objective[-1])
+
+
+def test_run_emits_no_unknown_solver_warning():
+    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=2, dtype=np.float64)
+    target = make_image(geometry, np.random.default_rng(0).uniform(1.0, 2.0, geometry.shape))
+    initial = make_image(geometry, np.full(geometry.shape, 0.5))
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=initial,
+        data_fidelity=L2NormSquared(b=target),
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", OptimizeWarning)
+        warnings.simplefilter("error", DeprecationWarning)
+        optimizer.run(iterations=3, verbose=0)
+
+
+def test_verbose_prints_scipy_summary(capsys):
+    geometry = ImageGeometry(voxel_num_x=4, voxel_num_y=4, voxel_num_z=2, dtype=np.float64)
+    target = make_image(geometry, np.random.default_rng(1).uniform(1.0, 2.0, geometry.shape))
+    initial = make_image(geometry, np.full(geometry.shape, 0.5))
+
+    optimizer = LBFGSBOptimizer(
+        initial_estimate=initial,
+        data_fidelity=L2NormSquared(b=target),
+    )
+    optimizer.run(iterations=3, verbose=1)
+
+    assert "L-BFGS-B" in capsys.readouterr().out
