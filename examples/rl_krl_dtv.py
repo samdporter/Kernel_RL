@@ -7,6 +7,9 @@ A self-contained 3D deconvolution demo on a synthetic two-blob phantom:
 * ``RL-dTV``   -- MAPRL with a Poisson deconvolution fidelity, a directional
   total-variation prior and a sensitivity-normalised EM preconditioner.
 * ``L-BFGS-B`` -- the same fidelity and prior optimised with L-BFGS-B.
+* ``L-BFGS-B-precond`` -- the same L-BFGS-B run through the fixed EM-type
+  diagonal change of variables ``x = M z`` (``∇_z = Mᵀ∇F``, ``x* = M z*``),
+  with ``M`` built from the EM preconditioner at the shared initial estimate.
 
 Run with ``python examples/rl_krl_dtv.py`` or, for a quick check,
 ``python examples/rl_krl_dtv.py --shape 6 8 8 --iterations 2``.
@@ -75,11 +78,12 @@ def _nrmse_percent(image, truth):
     return float(100.0 * np.sqrt(np.mean(difference**2)) / truth.as_array().max())
 
 
-def _record(results, name, reconstruction, objectives, ground_truth, iterations, **extra):
+def _record(results, name, reconstruction, objectives, ground_truth, iterations, label=None, **extra):
+    label = label or name
     nrmse_percent = _nrmse_percent(reconstruction, ground_truth)
     history = ", ".join(f"{value:.6g}" for value in objectives)
-    print(f"{name}: objective history, initial included = [{history}]")
-    print(f"{name}: final NRMSE = {nrmse_percent:.3f}% (iterations = {iterations})")
+    print(f"{label}: objective history, initial included = [{history}]")
+    print(f"{label}: final NRMSE = {nrmse_percent:.3f}% (iterations = {iterations})")
     entry = {
         "reconstruction": reconstruction,
         "objectives": objectives,
@@ -154,11 +158,12 @@ def _run_rl_dtv(fidelity, prior, observed, iterations, preconditioner):
     return algorithm.x, list(algorithm.loss), algorithm.step_size()
 
 
-def _run_lbfgsb(fidelity, prior, observed, iterations):
+def _run_lbfgsb(fidelity, prior, observed, iterations, preconditioner=None):
     optimizer = LBFGSBOptimizer(
         initial_estimate=observed.clone(),
         data_fidelity=fidelity,
         prior=prior,
+        preconditioner=preconditioner,
         options=LBFGSBOptions(
             max_linesearch=20,
             ftol=1e-6,
@@ -184,6 +189,7 @@ def main(argv=None):
 
     fidelity, prior = _build_fidelity_and_prior(geometry, anatomical, observed, blur)
     preconditioner = _make_em_preconditioner(geometry, blur)
+    em_diag = preconditioner(observed.clone())
 
     results = {}
 
@@ -218,26 +224,32 @@ def main(argv=None):
         final_step_size=dtv_step,
     )
 
-    lbfgsb = _run_lbfgsb(fidelity, prior, observed, args.iterations)
-    result = lbfgsb.result
-    print(
-        "L-BFGS-B: scipy_nfev = "
-        f"{result.nfev}, scipy_njev = {result.njev}, success = {result.success}, "
-        f"status = {result.status}, message = {result.message!r}"
-    )
-    _record(
-        results,
-        "L-BFGS-B",
-        lbfgsb.solution,
-        list(lbfgsb.objective),
-        ground_truth,
-        result.nit,
-        scipy_nfev=result.nfev,
-        scipy_njev=result.njev,
-        success=result.success,
-        status=result.status,
-        message=result.message,
-    )
+    lbfgsb_runs = [
+        ("L-BFGS-B", None, None),
+        ("L-BFGS-B-precond", em_diag, "L-BFGS-B (EM-preconditioned)"),
+    ]
+    for name, run_preconditioner, label in lbfgsb_runs:
+        optimizer = _run_lbfgsb(fidelity, prior, observed, args.iterations, run_preconditioner)
+        result = optimizer.result
+        print(
+            f"{label or name}: scipy_nfev = "
+            f"{result.nfev}, scipy_njev = {result.njev}, success = {result.success}, "
+            f"status = {result.status}, message = {result.message!r}"
+        )
+        _record(
+            results,
+            name,
+            optimizer.solution,
+            list(optimizer.objective),
+            ground_truth,
+            result.nit,
+            label=label,
+            scipy_nfev=result.nfev,
+            scipy_njev=result.njev,
+            success=result.success,
+            status=result.status,
+            message=result.message,
+        )
 
     return results
 

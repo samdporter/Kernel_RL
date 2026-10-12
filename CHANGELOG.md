@@ -27,8 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `master` is now a plugin-only checkout: the research pipelines, benchmark
   scripts and BrainWeb data preparation have moved to the
   `paper/brainweb-deconvolution` branch.
+- `examples/rl_krl_dtv.py` now reports five variants — RL, KRL, `RL-dTV`,
+  L-BFGS-B and L-BFGS-B-precond (the same L-BFGS-B run through the EM-type
+  diagonal change of variables), all on the same fidelity/prior for the two
+  L-BFGS-B runs, with `examples/README.md` updated accordingly.
 
 ### Added
+- Optional fixed diagonal linear preconditioner for `LBFGSBOptimizer`
+  (`preconditioner=`, an `ImageData` or `ndarray` with strictly positive
+  entries, fixed for the run), applied as a change of variables `x = M z`
+  (`f̃(z) = F(M z)`, `∇_z = m ⊙ ∇F(M z)`, `x* = M z*`); the objective history
+  and `solution` stay in image space and the default is the identity.
 - Maintained example `examples/rl_krl_dtv.py` comparing RL, KRL,
   directional-TV-regularised RL (`RL-dTV`) and L-BFGS-B on a synthetic phantom,
   where `RL-dTV` now uses a properly tuned preconditioned update

@@ -56,7 +56,7 @@ def test_main_tiny_end_to_end(tmp_path, monkeypatch, example):
 
     results = example.main(["--shape", "6", "8", "8", "--iterations", "2"])
 
-    assert set(results) == {"RL", "KRL", "RL-dTV", "L-BFGS-B"}
+    assert set(results) == {"RL", "KRL", "RL-dTV", "L-BFGS-B", "L-BFGS-B-precond"}
     for name, result in results.items():
         reconstruction = result["reconstruction"]
         array = reconstruction.as_array()
@@ -70,7 +70,7 @@ def test_main_tiny_end_to_end(tmp_path, monkeypatch, example):
 
         iterations = result["iterations"]
         assert 0 <= iterations <= 2, name
-        if name != "L-BFGS-B":
+        if name not in ("L-BFGS-B", "L-BFGS-B-precond"):
             assert len(objectives) == 3, name
             assert iterations == 2, name
 
@@ -238,57 +238,111 @@ def test_maprl_and_lbfgsb_share_fidelity_and_prior(monkeypatch, example):
     example.main(["--shape", "6", "8", "8", "--iterations", "2"])
 
     maprl = maprl_instances[0]
-    lbfgsb = lbfgsb_instances[0]
-
-    assert maprl.data_fidelity is lbfgsb.data_fidelity
-    assert maprl.prior is lbfgsb.prior
-    np.testing.assert_allclose(
-        maprl.initial_estimate.as_array(), lbfgsb.initial_estimate.as_array()
-    )
+    assert len(lbfgsb_instances) == 2
 
     maprl_objective = float(maprl.data_fidelity(maprl.initial_estimate)) + float(
         maprl.prior(maprl.initial_estimate)
     )
-    lbfgsb_objective = float(lbfgsb.data_fidelity(lbfgsb.initial_estimate)) + float(
-        lbfgsb.prior(lbfgsb.initial_estimate)
-    )
-    assert maprl_objective == pytest.approx(lbfgsb_objective, rel=1e-9, abs=1e-9)
 
-    assert lbfgsb.options.max_linesearch == 20
-    assert lbfgsb.options.ftol == 1e-6
-    assert lbfgsb.options.gtol == 1e-6
-    assert lbfgsb.options.enforce_non_negativity is True
+    for lbfgsb in lbfgsb_instances:
+        assert maprl.data_fidelity is lbfgsb.data_fidelity
+        assert maprl.prior is lbfgsb.prior
+        np.testing.assert_allclose(
+            maprl.initial_estimate.as_array(), lbfgsb.initial_estimate.as_array()
+        )
+
+        lbfgsb_objective = float(lbfgsb.data_fidelity(lbfgsb.initial_estimate)) + float(
+            lbfgsb.prior(lbfgsb.initial_estimate)
+        )
+        assert maprl_objective == pytest.approx(lbfgsb_objective, rel=1e-9, abs=1e-9)
+
+        assert lbfgsb.options.max_linesearch == 20
+        assert lbfgsb.options.ftol == 1e-6
+        assert lbfgsb.options.gtol == 1e-6
+        assert lbfgsb.options.enforce_non_negativity is True
 
 
 def test_lbfgsb_progress_and_diagnostics(monkeypatch, example):
-    captured = {}
+    captured = []
     original = example.LBFGSBOptimizer
 
     def recording(*args, **kwargs):
         instance = original(*args, **kwargs)
-        captured["optimizer"] = instance
+        captured.append(instance)
         return instance
 
     monkeypatch.setattr(example, "LBFGSBOptimizer", recording)
     results = example.main(["--shape", "6", "8", "8", "--iterations", "3"])
 
-    entry = results["L-BFGS-B"]
-    array = entry["reconstruction"].as_array()
-    assert np.all(np.isfinite(array))
-    assert np.all(array >= -1e-6)
+    assert len(captured) == 2
+    plain = next(optimizer for optimizer in captured if optimizer.preconditioner is None)
+    preconditioned = next(
+        optimizer for optimizer in captured if optimizer.preconditioner is not None
+    )
+    optimizers = {"L-BFGS-B": plain, "L-BFGS-B-precond": preconditioned}
 
-    objectives = entry["objectives"]
-    assert all(np.isfinite(value) for value in objectives)
-    assert objectives[-1] < objectives[0]
+    for name, optimizer in optimizers.items():
+        entry = results[name]
+        array = entry["reconstruction"].as_array()
+        assert np.all(np.isfinite(array))
+        assert np.all(array >= -1e-6)
 
-    result = captured["optimizer"].result
-    assert 0 <= entry["iterations"] <= 3
-    assert entry["iterations"] == result.nit
-    assert entry["scipy_nfev"] == result.nfev
-    assert entry["scipy_njev"] == result.njev
-    assert entry["success"] == result.success
-    assert entry["status"] == result.status
-    assert entry["message"] == result.message
+        objectives = entry["objectives"]
+        assert all(np.isfinite(value) for value in objectives)
+        assert objectives[-1] < objectives[0]
+
+        result = optimizer.result
+        assert 0 <= entry["iterations"] <= 3
+        assert entry["iterations"] == result.nit
+        assert entry["scipy_nfev"] == result.nfev
+        assert entry["scipy_njev"] == result.njev
+        assert entry["success"] == result.success
+        assert entry["status"] == result.status
+        assert entry["message"] == result.message
+
+
+def test_lbfgsb_preconditioner_is_em_type_diagonal(monkeypatch, example):
+    captured = []
+    original = example.LBFGSBOptimizer
+
+    def recording(*args, **kwargs):
+        instance = original(*args, **kwargs)
+        captured.append(instance)
+        return instance
+
+    monkeypatch.setattr(example, "LBFGSBOptimizer", recording)
+    example.main(["--shape", "6", "8", "8", "--iterations", "2"])
+
+    plain = next(optimizer for optimizer in captured if optimizer.preconditioner is None)
+    preconditioned = next(
+        optimizer for optimizer in captured if optimizer.preconditioner is not None
+    )
+    assert plain.preconditioner is None
+    assert preconditioned.preconditioner is not None
+
+    geometry = ImageGeometry(voxel_num_x=8, voxel_num_y=8, voxel_num_z=6, dtype=np.float32)
+    ground_truth, _ = make_phantom(geometry)
+    blur = create_gaussian_blur(sigma=(1, 1, 1), geometry=geometry, backend="numba")
+    observed = blur.direct(ground_truth)
+    sensitivity = np.maximum(blur.adjoint(geometry.allocate(1.0)).as_array(), 1e-6)
+    expected = (observed.as_array() + 1e-6) / sensitivity
+
+    diagonal = preconditioned.preconditioner.as_array()
+    np.testing.assert_allclose(diagonal, expected, rtol=1e-5, atol=1e-8)
+    assert np.all(np.isfinite(diagonal))
+    assert np.all(diagonal > 0)
+
+
+def test_lbfgsb_preconditioner_changes_the_trajectory(example):
+    results = example.main(["--shape", "6", "8", "8", "--iterations", "3"])
+
+    plain = results["L-BFGS-B"]["objectives"]
+    preconditioned = results["L-BFGS-B-precond"]["objectives"]
+
+    # Both histories start at the same image-space objective F(x0) ...
+    assert plain[0] == pytest.approx(preconditioned[0], rel=1e-9, abs=1e-9)
+    # ... but the fixed EM diagonal changes the descent path.
+    assert not np.allclose(plain, preconditioned)
 
 
 def test_default_case_rl_dtv_beats_blurred_baseline(example):
@@ -332,7 +386,7 @@ def test_import_is_headless_and_does_not_run():
         assert callable(module.main)
 
         results = module.main(["--shape", "6", "8", "8", "--iterations", "2"])
-        assert set(results) == {{"RL", "KRL", "RL-dTV", "L-BFGS-B"}}
+        assert set(results) == {{"RL", "KRL", "RL-dTV", "L-BFGS-B", "L-BFGS-B-precond"}}
 
         for blocked in BLOCKED:
             assert blocked not in sys.modules, blocked

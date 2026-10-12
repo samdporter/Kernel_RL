@@ -228,6 +228,18 @@ smoothing of the kernel.
   `Algorithm` subclass: it has its own `run(iterations, callbacks, verbose)`,
   enforces non-negativity by default (`LBFGSBOptions(enforce_non_negativity=True)`),
   and its callbacks receive the optimiser object rather than a CIL algorithm.
+  - Its optional `preconditioner` (an `ImageData` or `ndarray` holding a
+    strictly positive diagonal, fixed for the whole run; `None`, the default,
+    is the identity) is applied as a change of variables rather than passed to
+    SciPy: with `M = diag(m)` the run minimises `f̃(z) = F(M z)` with
+    `∇_z f̃ = m ⊙ ∇F(M z)` and returns `x* = M z*`. `objective`/`loss` and
+    `solution` therefore stay in image space, so histories are comparable with
+    unpreconditioned runs, and non-negativity still applies to `x` (the bounds
+    are imposed in `z`, and `m > 0` makes `z ≥ 0` equivalent to `x ≥ 0`).
+  - Relation to `MAPRL`'s preconditioner `P(x)`: choosing `M = P(x0)` makes the
+    initial `z`-gradient equal to `P(x0) ⊙ ∇F(x0)`, the EM-preconditioned
+    gradient direction `MAPRL` takes from the same initial estimate. `MAPRL`
+    may refresh a callable `P` during a run; the L-BFGS-B map is fixed.
 
 ## Comparison
 

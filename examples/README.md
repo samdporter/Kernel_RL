@@ -18,7 +18,7 @@ See the [README](../README.md#installation) for the full installation routes.
 
 ## rl_krl_dtv.py
 
-`rl_krl_dtv.py` is a self-contained CPU comparison of four deconvolution
+`rl_krl_dtv.py` is a self-contained CPU comparison of five deconvolution
 variants on a synthetic 3-D two-blob phantom:
 
 - **RL** — plain Richardson-Lucy deconvolution.
@@ -31,6 +31,13 @@ variants on a synthetic 3-D two-blob phantom:
   backtracking on every update.
 - **L-BFGS-B** — `LBFGSBOptimizer` (SciPy) minimising the *same* Poisson
   fidelity and DTV prior as RL-dTV, with non-negativity enforced.
+- **L-BFGS-B-precond** — the same L-BFGS-B run with `LBFGSBOptimizer`'s
+  optional fixed diagonal preconditioner, applied as a change of variables
+  `x = M z` (so `∇_z = Mᵀ∇F` and `x* = M z*`), with the EM-type diagonal
+  `M = diag((x0 + 1e-6) / max(Bᵀ1, 1e-6))` built by evaluating the MAPRL EM
+  preconditioner at the shared initial estimate. Both L-BFGS-B runs use the
+  same fidelity, prior and options, and both report the objective in image
+  space, so the two runs are directly comparable.
 
 Run it from the repository root:
 
@@ -49,12 +56,18 @@ objective history and final NRMSE for each variant together with the iteration
 count actually taken, RL-dTV's final step size, and SciPy's L-BFGS-B
 diagnostics (`nfev`, `njev`, `success`, `status`, `message`). The reported
 iteration count can be lower than the budget: L-BFGS-B stops at SciPy's own
-convergence test and reports that `nit`, not the budget it was given. It writes
+convergence test and reports that `nit`, not the budget it was given (on the
+default shape both L-BFGS-B runs instead reach the 50-iteration cap). It writes
 no files and produces no plots.
 
 The per-method objective histories are not cross-comparable between methods
-that optimise different objectives (RL/KRL vs the RL-dTV/L-BFGS-B pair).
-NRMSE is computed against the same ground truth with the same normalisation for
-all methods, so the reported NRMSE values are directly comparable on this
-phantom. Everything reported is illustrative only: a lower NRMSE for one
-variant here is not a general performance ranking.
+that optimise different objectives (RL/KRL vs RL-dTV and the two L-BFGS-B
+runs); the two L-BFGS-B runs share one objective, reported in image space for
+both, so those two histories are comparable with each other. NRMSE is computed
+against the same ground truth with the same normalisation for all methods, so
+the reported NRMSE values are directly comparable on this phantom. On the
+default shape (8, 16, 16) with the 50-iteration budget the final NRMSEs were
+4.372% observed, 0.274% RL, 0.614% KRL, 0.188% RL-dTV, 0.654% L-BFGS-B and
+0.362% L-BFGS-B-precond. Everything reported is illustrative only: a lower
+NRMSE for one variant here — including L-BFGS-B vs L-BFGS-B-precond — is not a
+general performance ranking.

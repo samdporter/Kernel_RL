@@ -155,7 +155,8 @@ and drive it with any CIL algorithm.
 Beyond the quickstart above, [`examples/`](examples/) holds runnable scripts;
 see [examples/README.md](examples/README.md) for details. The main one,
 [`examples/rl_krl_dtv.py`](examples/rl_krl_dtv.py), compares RL, KRL,
-directional-TV-regularised RL (`RL-dTV`) and L-BFGS-B on a synthetic phantom:
+directional-TV-regularised RL (`RL-dTV`) and L-BFGS-B — plain and with EM
+preconditioning — on a synthetic phantom:
 
 ```bash
 python examples/rl_krl_dtv.py
@@ -223,6 +224,13 @@ python examples/rl_krl_dtv.py
   "L-BFGS-B")` operating on flat arrays. It is **not** a CIL `Algorithm`
   subclass: it has its own `run(iterations, callbacks, verbose)` and its
   callbacks receive the optimiser object rather than a CIL algorithm.
+- `LBFGSBOptimizer` also accepts an optional fixed diagonal linear
+  preconditioner (`preconditioner=`, an `ImageData` or `ndarray` with strictly
+  positive entries), applied as a change of variables `x = M z` with
+  `M = diag(m)`: SciPy minimises `f̃(z) = F(M z)` with `∇_z = m ⊙ ∇F(M z)` and
+  the solution maps back as `x* = M z*`. The objective history and `solution`
+  stay in image space, non-negativity is still enforced on `x`, and the
+  default (`None`) is the identity.
 
 ### Image I/O
 
