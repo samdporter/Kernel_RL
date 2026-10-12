@@ -1,6 +1,7 @@
 """Tests for GPU kernel operator (PyTorch backend)."""
 
 import os
+import weakref
 
 import pytest
 
@@ -64,12 +65,6 @@ class DummyImage:
 def small_geometry():
     """Small test geometry (8x8x8)."""
     return DummyGeometry((8, 8, 8))
-
-
-@pytest.fixture
-def medium_geometry():
-    """Medium test geometry (16x16x16)."""
-    return DummyGeometry((16, 16, 16))
 
 
 @pytest.fixture
@@ -433,6 +428,225 @@ class TestBoundedDenseWeightSum:
         assert torch.isfinite(wsum).all()
 
 
+class TestNativeTorchHelperMath:
+    """Exercise the native torch kernel helpers directly on CPU tensors.
+
+    The public ``device="cpu"`` path delegates to the numba backend, so these
+    tests call the private ``_torch_*`` helpers and compare them with numba for
+    the same mask and hybrid reference. Covers normalize/hybrid/distance toggles.
+    """
+
+    @staticmethod
+    def _make_ops(geometry, anatomical, *, use_mask, normalize_kernel, hybrid, distance_weighting):
+        params = dict(
+            num_neighbours=3,
+            sigma_anat=0.5,
+            sigma_dist=1.0,
+            sigma_emission=0.5,
+            normalize_kernel=normalize_kernel,
+            use_mask=use_mask,
+            distance_weighting=distance_weighting,
+            hybrid=hybrid,
+        )
+        if use_mask:
+            params["mask_k"] = 10
+        torch_op = get_kernel_operator(
+            geometry, backend='torch', device='cpu', dtype='float32', **params
+        )
+        numba_op = get_kernel_operator(geometry, backend='numba', **params)
+        torch_op.set_anatomical_image(anatomical)
+        numba_op.set_anatomical_image(anatomical)
+        return torch_op, numba_op
+
+    @staticmethod
+    def _to_torch(op, array):
+        return torch.from_numpy(
+            np.ascontiguousarray(array, dtype=op.numpy_dtype)
+        ).to(op.device)
+
+    @staticmethod
+    def _norm_tensor(op, normalize_kernel, shape, normalisation_map=None):
+        if normalisation_map is not None:
+            return torch.from_numpy(
+                np.ascontiguousarray(normalisation_map, dtype=op.numpy_dtype)
+            ).to(op.device, dtype=op.torch_dtype)
+        if normalize_kernel:
+            return torch.zeros(shape, dtype=op.torch_dtype, device=op.device)
+        return torch.zeros((1, 1, 1), dtype=op.torch_dtype, device=op.device)
+
+    @pytest.mark.parametrize("distance_weighting", [False, True])
+    @pytest.mark.parametrize("hybrid", [False, True])
+    @pytest.mark.parametrize("normalize_kernel", [False, True])
+    @pytest.mark.parametrize("use_mask", [False, True])
+    def test_native_forward_matches_numba(
+        self, small_geometry, anatomical_gradient, use_mask, normalize_kernel,
+        hybrid, distance_weighting,
+    ):
+        torch_op, numba_op = self._make_ops(
+            small_geometry,
+            anatomical_gradient,
+            use_mask=use_mask,
+            normalize_kernel=normalize_kernel,
+            hybrid=hybrid,
+            distance_weighting=distance_weighting,
+        )
+
+        rng = np.random.default_rng(17)
+        x_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+        reference = numba_op.direct(DummyImage(x_arr)).as_array()
+
+        anat_tensor = self._to_torch(torch_op, torch_op._validate_anatomical_image())
+        x_tensor = self._to_torch(torch_op, x_arr)
+        if hybrid:
+            ref_tensor = self._to_torch(torch_op, torch_op._update_hybrid_reference(x_arr))
+        else:
+            ref_tensor = x_tensor
+        norm_tensor = self._norm_tensor(torch_op, normalize_kernel, anat_tensor.shape)
+
+        if use_mask:
+            mask_cpu = torch_op._get_mask_cpu(dtype=torch.int16)
+            result = torch_op._torch_kernel_forward_sparse(
+                x_tensor,
+                ref_tensor,
+                anat_tensor,
+                mask_cpu,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                normalize_kernel,
+                hybrid,
+                distance_weighting,
+            )
+        else:
+            result = torch_op._torch_kernel_forward_dense(
+                x_tensor,
+                ref_tensor,
+                anat_tensor,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                normalize_kernel,
+                hybrid,
+                distance_weighting,
+            )
+
+        np.testing.assert_allclose(result.cpu().numpy(), reference, rtol=1e-3, atol=1e-5)
+
+    @pytest.mark.parametrize("distance_weighting", [False, True])
+    @pytest.mark.parametrize("hybrid", [False, True])
+    @pytest.mark.parametrize("normalize_kernel", [False, True])
+    @pytest.mark.parametrize("use_mask", [False, True])
+    def test_native_adjoint_matches_numba(
+        self, small_geometry, anatomical_gradient, use_mask, normalize_kernel,
+        hybrid, distance_weighting,
+    ):
+        torch_op, numba_op = self._make_ops(
+            small_geometry,
+            anatomical_gradient,
+            use_mask=use_mask,
+            normalize_kernel=normalize_kernel,
+            hybrid=hybrid,
+            distance_weighting=distance_weighting,
+        )
+
+        rng = np.random.default_rng(29)
+        x_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+        y_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+
+        # direct() initialises the hybrid reference and the normalisation map.
+        numba_op.direct(DummyImage(x_arr))
+        reference = numba_op.adjoint(DummyImage(y_arr)).as_array()
+
+        anat_tensor = self._to_torch(torch_op, torch_op._validate_anatomical_image())
+        y_tensor = self._to_torch(torch_op, y_arr)
+        if hybrid:
+            ref_tensor = self._to_torch(torch_op, torch_op._update_hybrid_reference(x_arr))
+        else:
+            ref_tensor = y_tensor
+        if normalize_kernel:
+            norm_tensor = self._norm_tensor(
+                torch_op, True, y_tensor.shape, numba_op._normalisation_map
+            )
+        else:
+            norm_tensor = self._norm_tensor(torch_op, False, y_tensor.shape)
+
+        if use_mask:
+            mask_cpu = torch_op._get_mask_cpu(dtype=torch.int16)
+            result = torch_op._torch_adjoint_sparse(
+                y_tensor,
+                ref_tensor,
+                anat_tensor,
+                mask_cpu,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                hybrid,
+                distance_weighting,
+            )
+        else:
+            result = torch_op._torch_adjoint_dense(
+                y_tensor,
+                ref_tensor,
+                anat_tensor,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                hybrid,
+                distance_weighting,
+            )
+
+        np.testing.assert_allclose(result.cpu().numpy(), reference, rtol=1e-3, atol=1e-5)
+
+
+class TestNeighbourhoodKernelValidation:
+    """The public neighbourhood_kernel entry point validates sigma_anat.
+
+    direct()/adjoint() validate through apply(), but neighbourhood_kernel is
+    public and can be called directly, so it must reject non-positive sigma_anat
+    instead of silently producing NaNs.
+    """
+
+    def test_rejects_non_positive_sigma_anat(
+        self, small_geometry, anatomical_gradient, emission_uniform
+    ):
+        op = get_kernel_operator(
+            small_geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            num_neighbours=3,
+            sigma_anat=0.5,
+            use_mask=False,
+        )
+        op.set_anatomical_image(anatomical_gradient)
+        # Prime the delegate's cached weights so the CPU path would not
+        # re-validate sigma_anat on its own.
+        op.direct(emission_uniform)
+
+        with pytest.raises(ValueError, match="sigma_anat"):
+            op.neighbourhood_kernel(
+                emission_uniform,
+                op.anatomical_image,
+                3,
+                0.0,
+                1.0,
+                0.5,
+                True,
+                False,
+                False,
+                False,
+                False,
+            )
+
+
 class TestGPUvsCPUConsistency:
     """Test GPU results match CPU results."""
 
@@ -657,46 +871,97 @@ class TestKernelParameterEffectsGPU:
         assert float(np.linalg.norm(res_emission_tight - res_emission_wide)) > 1e-3
 
 
-@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
-class TestGPUMemoryManagement:
-    """Test GPU memory management."""
+class TestOperatorCacheLifecycle:
+    """Deterministic checks on the operator-owned cache fields.
 
-    def test_memory_cleanup(self, medium_geometry, anatomical_gradient):
-        """Test GPU memory is released after operation."""
-        # Record initial memory
-        torch.cuda.reset_peak_memory_stats()
-        initial_mem = torch.cuda.memory_allocated()
+    These do not touch the CUDA allocator, so they run on CPU-only hosts too.
+    """
 
-        # Create operator and run operations
+    def test_clear_gpu_drops_cached_tensors(self, small_geometry):
         op = get_kernel_operator(
-            medium_geometry,
+            small_geometry,
             backend='torch',
-            device='cuda',
+            device='cpu',
             dtype='float32',
-            num_neighbours=5,
-            mask_k=20,
+            num_neighbours=3,
+            mask_k=10,
         )
+        sentinel = torch.zeros(small_geometry.shape, dtype=torch.float32)
+        op._mask_gpu = sentinel
+        op._mask_cpu = sentinel
+        op._normalisation_map_gpu = sentinel
+        op._normalisation_map_cpu = sentinel
 
-        # Create larger anatomical for medium geometry
-        anat = medium_geometry.allocate(0.0)
-        grad = np.indices(medium_geometry.shape).sum(axis=0).astype(np.float32)
-        grad = grad / grad.max()
-        anat.fill(grad)
-
-        op.set_anatomical_image(anat)
-
-        # Run operations
-        emission = medium_geometry.allocate(1.0)
-        _ = op.direct(emission)
-
-        # Clear GPU
         op.clear_gpu()
 
-        # Memory should be released
-        final_mem = torch.cuda.memory_allocated()
-        # Some memory may remain but should be much less than peak
-        peak_mem = torch.cuda.max_memory_allocated()
-        assert final_mem < peak_mem * 0.5  # At least 50% should be freed
+        assert op._mask_gpu is None
+        assert op._mask_cpu is None
+        assert op._normalisation_map_gpu is None
+        assert op._normalisation_map_cpu is None
+
+    def test_clear_gpu_retains_cached_tensors_when_requested(self, small_geometry):
+        op = get_kernel_operator(
+            small_geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            num_neighbours=3,
+            mask_k=10,
+        )
+        sentinel = torch.zeros(small_geometry.shape, dtype=torch.float32)
+        op._mask_gpu = sentinel
+        op._mask_cpu = sentinel
+        op._normalisation_map_gpu = sentinel
+        op._normalisation_map_cpu = sentinel
+
+        op.clear_gpu(release_cached_tensors=False)
+
+        assert op._mask_gpu is sentinel
+        assert op._mask_cpu is sentinel
+        assert op._normalisation_map_gpu is sentinel
+        assert op._normalisation_map_cpu is sentinel
+
+
+@pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
+def test_cuda_clear_gpu_releases_cache_references(small_geometry):
+    """CUDA-only: clear_gpu() drops the references to the cache tensors.
+
+    NOTE: unverified in this environment (no CUDA); requires the CUDA run to
+    confirm the weak references are actually released.
+    """
+    op = get_kernel_operator(
+        small_geometry,
+        backend='torch',
+        device='cuda',
+        dtype='float32',
+        num_neighbours=3,
+        mask_k=10,
+    )
+    op.set_anatomical_image(small_geometry.allocate(1.0))
+
+    op._mask_gpu = torch.zeros(small_geometry.shape, dtype=torch.float32, device='cuda')
+    op._mask_cpu = torch.zeros(small_geometry.shape, dtype=torch.int16)
+    op._normalisation_map_gpu = torch.zeros(
+        small_geometry.shape, dtype=torch.float32, device='cuda'
+    )
+    op._normalisation_map_cpu = torch.zeros(small_geometry.shape, dtype=torch.float32)
+
+    mask_gpu_ref = weakref.ref(op._mask_gpu)
+    norm_gpu_ref = weakref.ref(op._normalisation_map_gpu)
+
+    torch.cuda.synchronize()
+    op.clear_gpu()
+
+    assert op._mask_gpu is None
+    assert op._mask_cpu is None
+    assert op._normalisation_map_gpu is None
+    assert op._normalisation_map_cpu is None
+    assert mask_gpu_ref() is None
+    assert norm_gpu_ref() is None
+
+    # The operator must remain usable once its caches have been cleared.
+    result = op.direct(small_geometry.allocate(1.0))
+    assert result.shape == small_geometry.shape
 
 
 def make_cil_geometry(shape=(6, 6, 6), dtype=np.float64):

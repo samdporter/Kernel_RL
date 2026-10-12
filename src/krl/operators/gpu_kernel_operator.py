@@ -6,7 +6,7 @@ enabling processing of large volumes (e.g., 256³) on consumer GPUs with limited
 Key features:
 - float32 precision (halves memory vs float64)
 - Sparse neighbor masking for efficiency
-- Pre-computed anatomical weights (cached on GPU)
+- On-the-fly anatomical weights computed in bounded batches (only the CPU-delegation path caches them)
 - Automatic device management
 - Compatible API with BaseKernelOperator
 
@@ -295,7 +295,6 @@ class TorchKernelOperator(BaseKernelOperator):
         k = mask_cpu.shape[3]
         sig2_an = 2.0 * sigma_anat * sigma_anat
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_dist = distance_weighting and sigma_dist > 0
 
         anat_padded = self._pad_reflect_inclusive(anat_arr, half)
@@ -331,10 +330,7 @@ class TorchKernelOperator(BaseKernelOperator):
                 neighbor_vals = anat_padded[i_indices, j_indices, k_indices]
                 diff_an = neighbor_vals - center_vals
 
-                if use_anat:
-                    wi_an = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    wi_an = torch.ones_like(diff_an)
+                wi_an = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     di_f = di.to(self.torch_dtype)
@@ -357,7 +353,6 @@ class TorchKernelOperator(BaseKernelOperator):
         total = n ** 3
         sig2_an = 2.0 * sigma_anat * sigma_anat
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_dist = distance_weighting and sigma_dist > 0
 
         anat_padded = self._pad_reflect_inclusive(anat_arr, half)
@@ -384,10 +379,7 @@ class TorchKernelOperator(BaseKernelOperator):
                 neighbor_vals = anat_padded[ii, jj, kk].unsqueeze(-1)
                 diff_an = neighbor_vals - center_vals
 
-                if use_anat:
-                    wi_an = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    wi_an = torch.ones_like(diff_an)
+                wi_an = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     dist_sq = (di * di + dj * dj + dk * dk)
@@ -410,7 +402,6 @@ class TorchKernelOperator(BaseKernelOperator):
         half = n // 2
         sig2_an = 2.0 * sigma_anat * sigma_anat
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_dist = distance_weighting and sigma_dist > 0
 
         anat_padded = self._pad_reflect_inclusive(anat_arr, half)
@@ -438,10 +429,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
                 neighbor_anat = anat_padded[ii, jj, kk]
                 diff_an = neighbor_anat - center_anat
-                if use_anat:
-                    w = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    w = torch.ones_like(diff_an)
+                w = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     dist_sq = di * di + dj * dj + dk * dk
@@ -590,6 +578,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
         This is the main entry point called by direct().
         """
+        self._validate_sigma("sigma_anat", sigma_anat)
         if self.device.type == 'cpu':
             if self._cpu_operator is None:
                 raise RuntimeError(
@@ -749,7 +738,6 @@ class TorchKernelOperator(BaseKernelOperator):
         sig2_an = 2.0 * sigma_anat * sigma_anat
         sig2_em = 2.0 * sigma_emission * sigma_emission
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
@@ -810,10 +798,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
                 # Compute anatomical weight
                 diff_an = neighbor_anat - center_anat
-                if use_anat:
-                    w = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    w = torch.ones_like(diff_an)
+                w = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     di_f = di.to(self.torch_dtype)
@@ -856,7 +841,6 @@ class TorchKernelOperator(BaseKernelOperator):
         sig2_an = 2.0 * sigma_anat * sigma_anat
         sig2_em = 2.0 * sigma_emission * sigma_emission
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
@@ -901,10 +885,7 @@ class TorchKernelOperator(BaseKernelOperator):
                 x_neighbor = x_padded[ii, jj, kk]
                 neighbor_anat = anat_padded[ii, jj, kk]
                 diff_an = neighbor_anat - center_anat
-                if use_anat:
-                    w = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    w = torch.ones_like(diff_an)
+                w = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     dist_sq = (di * di + dj * dj + dk * dk)
@@ -1059,7 +1040,6 @@ class TorchKernelOperator(BaseKernelOperator):
         sig2_an = 2.0 * sigma_anat * sigma_anat
         sig2_em = 2.0 * sigma_emission * sigma_emission
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
@@ -1100,10 +1080,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
                 neighbor_anat = anat_arr[i_indices, j_indices, k_indices]
                 diff_an = neighbor_anat - center_anat
-                if use_anat:
-                    w = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    w = torch.ones_like(diff_an)
+                w = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     di_f = di.to(self.torch_dtype)
@@ -1134,7 +1111,6 @@ class TorchKernelOperator(BaseKernelOperator):
         sig2_an = 2.0 * sigma_anat * sigma_anat
         sig2_em = 2.0 * sigma_emission * sigma_emission
         dist2_an = 2.0 * sigma_dist * sigma_dist
-        use_anat = sigma_anat > 0
         use_em = hybrid and sigma_emission > 0
         use_dist = distance_weighting and sigma_dist > 0
 
@@ -1172,10 +1148,7 @@ class TorchKernelOperator(BaseKernelOperator):
 
                 neighbor_anat = anat_arr[i_indices, j_indices, k_indices]
                 diff_an = neighbor_anat - center_anat
-                if use_anat:
-                    w = torch.exp(-diff_an * diff_an / sig2_an)
-                else:
-                    w = torch.ones_like(diff_an)
+                w = torch.exp(-diff_an * diff_an / sig2_an)
 
                 if use_dist:
                     dist_sq = (di * di + dj * dj + dk * dk)
