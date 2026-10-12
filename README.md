@@ -154,8 +154,8 @@ and drive it with any CIL algorithm.
 
 Beyond the quickstart above, [`examples/`](examples/) holds runnable scripts;
 see [examples/README.md](examples/README.md) for details. The main one,
-[`examples/rl_krl_dtv.py`](examples/rl_krl_dtv.py), compares RL, KRL and
-directional-TV-regularised RL (`RL-dTV`) on a synthetic phantom:
+[`examples/rl_krl_dtv.py`](examples/rl_krl_dtv.py), compares RL, KRL,
+directional-TV-regularised RL (`RL-dTV`) and L-BFGS-B on a synthetic phantom:
 
 ```bash
 python examples/rl_krl_dtv.py

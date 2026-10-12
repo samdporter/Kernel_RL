@@ -29,8 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `paper/brainweb-deconvolution` branch.
 
 ### Added
-- Maintained example `examples/rl_krl_dtv.py` comparing RL, KRL and
-  directional-TV-regularised RL (`RL-dTV`) on a synthetic phantom, with
+- Maintained example `examples/rl_krl_dtv.py` comparing RL, KRL,
+  directional-TV-regularised RL (`RL-dTV`) and L-BFGS-B on a synthetic phantom,
+  where `RL-dTV` now uses a properly tuned preconditioned update
+  (sensitivity-normalised EM preconditioner, step 1.0 with Armijo backtracking
+  on every update) on the same objective L-BFGS-B minimises, with
   `examples/README.md`, tests in `tests/test_example_rl_krl_dtv.py` and ruff
   coverage of `examples/` in CI and the Makefile.
 

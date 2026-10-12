@@ -181,6 +181,14 @@ image; it does not model a PSF and is therefore not PSF-aware deconvolution.
 For a deconvolution demonstration, compose the fidelity with the blur operator,
 e.g. `OperatorCompositionFunction(L2NormSquared(b=observed), blur_op)`.
 
+The `step_size=1e-3` in this snippet is conservative on purpose: with the
+identity-model L2 term the gradient scale differs from a Poisson setup, so
+`1e-3` is *not* the recommended setting for Poisson deconvolution (and the
+snippet's step should not be raised to `1`). See
+[`examples/rl_krl_dtv.py`](../examples/rl_krl_dtv.py) for a tuned, runnable
+example that uses a different fidelity, an EM preconditioner and a different
+step convention.
+
 Since `xi` points across anatomical boundaries, the soft projection attenuates
 the component of `grad x` in that direction before the penalty is evaluated, so
 gradient components across anatomical boundaries are penalised less than

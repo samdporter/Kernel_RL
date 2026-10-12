@@ -56,7 +56,7 @@ def test_main_tiny_end_to_end(tmp_path, monkeypatch, example):
 
     results = example.main(["--shape", "6", "8", "8", "--iterations", "2"])
 
-    assert set(results) == {"RL", "KRL", "RL-dTV"}
+    assert set(results) == {"RL", "KRL", "RL-dTV", "L-BFGS-B"}
     for name, result in results.items():
         reconstruction = result["reconstruction"]
         array = reconstruction.as_array()
@@ -65,9 +65,17 @@ def test_main_tiny_end_to_end(tmp_path, monkeypatch, example):
         assert np.all(array >= -1e-6), name
 
         objectives = result["objectives"]
-        assert len(objectives) == 3, name
         assert all(np.isfinite(value) for value in objectives), name
         assert np.isfinite(result["nrmse_percent"]), name
+
+        iterations = result["iterations"]
+        assert 0 <= iterations <= 2, name
+        if name != "L-BFGS-B":
+            assert len(objectives) == 3, name
+            assert iterations == 2, name
+
+    assert "final_step_size" in results["RL-dTV"]
+    assert np.isfinite(results["RL-dTV"]["final_step_size"])
 
     # The example must not write any files into the working directory.
     assert list(tmp_path.iterdir()) == []
@@ -175,6 +183,130 @@ def test_objectives_decrease_from_initial_to_final(example):
         )
 
 
+def test_rl_dtv_preconditioner_is_sensitivity_normalised_em(monkeypatch, example):
+    captured = {}
+    original = example.MAPRL
+
+    def recording(*args, **kwargs):
+        instance = original(*args, **kwargs)
+        captured["algorithm"] = instance
+        return instance
+
+    monkeypatch.setattr(example, "MAPRL", recording)
+    example.main(["--shape", "6", "8", "8", "--iterations", "3"])
+
+    algorithm = captured["algorithm"]
+    preconditioner = algorithm.preconditioner
+    assert callable(preconditioner)
+    assert algorithm.preconditioner_update_initial == 0
+    assert algorithm.preconditioner_update_interval == 1
+    assert algorithm.initial_step_size == 1.0
+    assert algorithm.armijo_iterations == 3
+
+    geometry = ImageGeometry(voxel_num_x=8, voxel_num_y=8, voxel_num_z=6, dtype=np.float32)
+    blur = create_gaussian_blur(sigma=(1, 1, 1), geometry=geometry, backend="numba")
+    sensitivity = np.maximum(blur.adjoint(geometry.allocate(1.0)).as_array(), 1e-6)
+
+    for seed in (0, 1):
+        image = geometry.allocate(0.0)
+        image.fill(np.random.default_rng(seed).uniform(0.0, 1.0, geometry.shape).astype(np.float32))
+        expected = (image.as_array() + 1e-6) / sensitivity
+        result = preconditioner(image).as_array()
+        np.testing.assert_allclose(result, expected, rtol=1e-5, atol=1e-8)
+        assert np.all(np.isfinite(result))
+        assert np.all(result > 0)
+
+
+def test_maprl_and_lbfgsb_share_fidelity_and_prior(monkeypatch, example):
+    maprl_instances = []
+    lbfgsb_instances = []
+    original_maprl = example.MAPRL
+    original_lbfgsb = example.LBFGSBOptimizer
+
+    def recording_maprl(*args, **kwargs):
+        instance = original_maprl(*args, **kwargs)
+        maprl_instances.append(instance)
+        return instance
+
+    def recording_lbfgsb(*args, **kwargs):
+        instance = original_lbfgsb(*args, **kwargs)
+        lbfgsb_instances.append(instance)
+        return instance
+
+    monkeypatch.setattr(example, "MAPRL", recording_maprl)
+    monkeypatch.setattr(example, "LBFGSBOptimizer", recording_lbfgsb)
+    example.main(["--shape", "6", "8", "8", "--iterations", "2"])
+
+    maprl = maprl_instances[0]
+    lbfgsb = lbfgsb_instances[0]
+
+    assert maprl.data_fidelity is lbfgsb.data_fidelity
+    assert maprl.prior is lbfgsb.prior
+    np.testing.assert_allclose(
+        maprl.initial_estimate.as_array(), lbfgsb.initial_estimate.as_array()
+    )
+
+    maprl_objective = float(maprl.data_fidelity(maprl.initial_estimate)) + float(
+        maprl.prior(maprl.initial_estimate)
+    )
+    lbfgsb_objective = float(lbfgsb.data_fidelity(lbfgsb.initial_estimate)) + float(
+        lbfgsb.prior(lbfgsb.initial_estimate)
+    )
+    assert maprl_objective == pytest.approx(lbfgsb_objective, rel=1e-9, abs=1e-9)
+
+    assert lbfgsb.options.max_linesearch == 20
+    assert lbfgsb.options.ftol == 1e-6
+    assert lbfgsb.options.gtol == 1e-6
+    assert lbfgsb.options.enforce_non_negativity is True
+
+
+def test_lbfgsb_progress_and_diagnostics(monkeypatch, example):
+    captured = {}
+    original = example.LBFGSBOptimizer
+
+    def recording(*args, **kwargs):
+        instance = original(*args, **kwargs)
+        captured["optimizer"] = instance
+        return instance
+
+    monkeypatch.setattr(example, "LBFGSBOptimizer", recording)
+    results = example.main(["--shape", "6", "8", "8", "--iterations", "3"])
+
+    entry = results["L-BFGS-B"]
+    array = entry["reconstruction"].as_array()
+    assert np.all(np.isfinite(array))
+    assert np.all(array >= -1e-6)
+
+    objectives = entry["objectives"]
+    assert all(np.isfinite(value) for value in objectives)
+    assert objectives[-1] < objectives[0]
+
+    result = captured["optimizer"].result
+    assert 0 <= entry["iterations"] <= 3
+    assert entry["iterations"] == result.nit
+    assert entry["scipy_nfev"] == result.nfev
+    assert entry["scipy_njev"] == result.njev
+    assert entry["success"] == result.success
+    assert entry["status"] == result.status
+    assert entry["message"] == result.message
+
+
+def test_default_case_rl_dtv_beats_blurred_baseline(example):
+    results = example.main([])
+
+    geometry = ImageGeometry(voxel_num_x=16, voxel_num_y=16, voxel_num_z=8, dtype=np.float32)
+    ground_truth, _ = make_phantom(geometry)
+    blur = create_gaussian_blur(sigma=(1, 1, 1), geometry=geometry, backend="numba")
+    observed = blur.direct(ground_truth)
+    observed_nrmse = float(
+        100.0
+        * np.sqrt(np.mean((observed.as_array() - ground_truth.as_array()) ** 2))
+        / ground_truth.as_array().max()
+    )
+
+    assert results["RL-dTV"]["nrmse_percent"] <= 0.90 * observed_nrmse
+
+
 def test_import_is_headless_and_does_not_run():
     code = textwrap.dedent(
         f"""
@@ -200,7 +332,7 @@ def test_import_is_headless_and_does_not_run():
         assert callable(module.main)
 
         results = module.main(["--shape", "6", "8", "8", "--iterations", "2"])
-        assert set(results) == {{"RL", "KRL", "RL-dTV"}}
+        assert set(results) == {{"RL", "KRL", "RL-dTV", "L-BFGS-B"}}
 
         for blocked in BLOCKED:
             assert blocked not in sys.modules, blocked
@@ -208,14 +340,19 @@ def test_import_is_headless_and_does_not_run():
         print("BLOCKED_IMPORT_OK")
         """
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=180
+    )
     assert result.returncode == 0, result.stderr
     assert "BLOCKED_IMPORT_OK" in result.stdout
 
 
 def test_help_lists_cli_options():
     result = subprocess.run(
-        [sys.executable, str(EXAMPLE_PATH), "--help"], capture_output=True, text=True
+        [sys.executable, str(EXAMPLE_PATH), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=180,
     )
     assert result.returncode == 0, result.stderr
     assert "--iterations" in result.stdout
