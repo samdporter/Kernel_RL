@@ -358,7 +358,8 @@ def test_save_nonzero_centred_geometry_affine(tmp_path):
 
 def test_save_2d_imagedata_keeps_z_origin(tmp_path):
     """A 2-D geometry has voxel_num_z == 0; its absent z axis must not be
-    shifted by the 3-D translation formula."""
+    shifted by the 3-D translation formula, and CIL (y, x) is written as
+    NIfTI (x, y)."""
     import nibabel as nib
     from cil.framework import ImageGeometry
 
@@ -377,7 +378,51 @@ def test_save_2d_imagedata_keeps_z_origin(tmp_path):
 
     saved = nib.load(str(output))
     assert saved.affine[2, 3] == pytest.approx(0.0)
-    np.testing.assert_array_equal(saved.get_fdata(), data)
+    assert saved.shape == (4, 3)
+    np.testing.assert_allclose(
+        np.diag(saved.affine[:3, :3]), (2.0, 3.0, 1.0), atol=1e-6
+    )
+    # CIL (y, x) -> NIfTI (x, y): voxel (y=1, x=2) lands at saved[2, 1].
+    saved_data = saved.get_fdata()
+    np.testing.assert_array_equal(saved_data, data.T)
+    assert saved_data[2, 1] == image.as_array()[1, 2]
+
+
+def test_save_2d_matches_3d_xy_mapping(tmp_path):
+    """The 2-D save applies the same (x, y) transpose as the 3-D save, checked
+    against the corresponding z slice."""
+    import nibabel as nib
+    from cil.framework import ImageGeometry
+
+    from krl.utils import save_image
+
+    data2d = np.arange(12, dtype=np.float32).reshape(3, 4)
+
+    geometry2d = ImageGeometry(
+        voxel_num_x=4, voxel_num_y=3, voxel_size_x=2.0, voxel_size_y=3.0
+    )
+    image2d = geometry2d.allocate(0.0)
+    image2d.fill(data2d)
+
+    geometry3d = ImageGeometry(
+        voxel_num_x=4,
+        voxel_num_y=3,
+        voxel_num_z=2,
+        voxel_size_x=2.0,
+        voxel_size_y=3.0,
+        voxel_size_z=5.0,
+    )
+    image3d = geometry3d.allocate(0.0)
+    image3d.fill(np.stack([data2d, data2d + 100.0], axis=0))
+
+    output2d = tmp_path / "out2d.nii"
+    output3d = tmp_path / "out3d.nii"
+    save_image(image2d, output2d)
+    save_image(image3d, output3d)
+
+    saved2d = nib.load(str(output2d)).get_fdata()
+    saved3d = nib.load(str(output3d)).get_fdata()
+    np.testing.assert_array_equal(saved2d, saved3d[:, :, 0])
 
 
 @pytest.mark.parametrize(
