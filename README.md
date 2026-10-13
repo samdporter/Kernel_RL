@@ -21,7 +21,7 @@ ecosystem (callbacks, functions, block operators, ...).
 
 Install CIL **first** — it is distributed via conda (conda-forge + ccpi
 channels), not PyPI, and is a separate package from `cil-krl`. Then install
-`cil-krl` from PyPI (the current release is 0.4.1):
+`cil-krl` from PyPI (the current release is 0.4.2):
 
 ```bash
 pip install cil-krl
@@ -251,9 +251,10 @@ python examples/rl_krl_dtv.py
   affines CIL cannot represent (flips, axis permutations, rotation, shear) and
   complex/RGB/structured volumes are rejected with a clear error. Out-of-range
   int64 values warn about possible rounding.
-- `save_image` requires a CIL `ImageData` (a raw ndarray raises `TypeError`)
-  and writes an origin derived from the geometry centre. Original NIfTI header
-  fields and qform/sform codes are not retained.
+- `save_image` requires a CIL `ImageData` (a raw ndarray raises `TypeError`),
+  writes CIL axis order as NIfTI (2-D `(y, x)` → `(x, y)`, 3-D `(z, y, x)` →
+  `(x, y, z)`) and writes an origin derived from the geometry centre. Original
+  NIfTI header fields and qform/sform codes are not retained.
 
 ## Development
 

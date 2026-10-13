@@ -264,10 +264,12 @@ def save_image(image, filepath):
             f"save_image requires finite volume centres, got {tuple(centers)}"
         )
 
-    # CIL (z,y,x) -> NIfTI (x,y,z)
+    # CIL (z,y,x) -> NIfTI (x,y,z); a 2-D CIL image is (y,x) -> NIfTI (x,y)
     data = get_array(image)
     if data.ndim == 3:
         data = np.transpose(data, (2, 1, 0))
+    elif data.ndim == 2:
+        data = np.transpose(data, (1, 0))
 
     # An absent axis (voxel_num == 0, e.g. z for a 2-D image) has no voxel
     # centre, so its translation stays at the origin instead of using the

@@ -264,9 +264,10 @@ smoothing of the kernel.
   flips, axis permutations, rotation and shear in the affine are rejected, as
   are complex/RGB/structured volumes. Out-of-range int64 values warn about
   possible rounding.
-- `save_image` accepts a CIL `ImageData` only (a raw array raises `TypeError`)
-  and writes an origin derived from the geometry centre; original NIfTI header
-  fields and qform/sform codes are not retained.
+- `save_image` accepts a CIL `ImageData` only (a raw array raises `TypeError`),
+  writes CIL axis order as NIfTI (2-D `(y, x)` → `(x, y)`, 3-D `(z, y, x)` →
+  `(x, y, z)`) and writes an origin derived from the geometry centre; original
+  NIfTI header fields and qform/sform codes are not retained.
 
 ## Comparison
 
