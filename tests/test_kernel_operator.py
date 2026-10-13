@@ -464,6 +464,198 @@ def test_neighbourhood_size_adjusts_smoothing(geometry, emission_spike):
     assert np.var(res_large) >= np.var(res_small) * 0.9  # Allow 10% tolerance
 
 
+def _varying_anatomy_array(geometry):
+    """Anatomy whose standard deviation is far from 1, so feature
+    normalisation visibly changes the anatomical weights."""
+    coords = np.indices(geometry.shape).astype(np.float64)
+    return 20.0 * (coords[0] + coords[1] + coords[2])
+
+
+def _toggle_params(use_mask):
+    return dict(
+        backend="numba",
+        num_neighbours=3,
+        sigma_anat=0.3,
+        sigma_dist=1.0,
+        normalize_kernel=True,
+        use_mask=use_mask,
+        mask_k=10 if use_mask else None,
+        hybrid=False,
+    )
+
+
+@pytest.mark.parametrize("use_mask", [False, True])
+def test_toggling_normalize_features_rebuilds_from_raw_snapshot(geometry, use_mask):
+    params = _toggle_params(use_mask)
+    anat_arr = _varying_anatomy_array(geometry)
+    anatomy = make_image(geometry, anat_arr)
+
+    rng = np.random.default_rng(101)
+    emission = make_image(geometry, rng.normal(size=geometry.shape))
+    adjoint_input = make_image(geometry, rng.normal(size=geometry.shape))
+
+    operator = get_kernel_operator(geometry, normalize_features=True, **params)
+    operator.set_anatomical_image(anatomy)
+    # Populate the derived caches under the initial setting.
+    direct_true = operator.direct(emission).as_array()
+    operator.adjoint(adjoint_input)
+
+    fresh_true = get_kernel_operator(geometry, normalize_features=True, **params)
+    fresh_true.set_anatomical_image(anatomy)
+    expected_direct_true = fresh_true.direct(emission)
+    expected_adjoint_true = fresh_true.adjoint(adjoint_input)
+
+    operator.set_parameters({"normalize_features": False})
+    direct_false = operator.direct(emission)
+    adjoint_false = operator.adjoint(adjoint_input)
+
+    fresh_false = get_kernel_operator(geometry, normalize_features=False, **params)
+    fresh_false.set_anatomical_image(anatomy)
+    expected_direct_false = fresh_false.direct(emission)
+    expected_adjoint_false = fresh_false.adjoint(adjoint_input)
+
+    np.testing.assert_allclose(
+        direct_false.as_array(), expected_direct_false.as_array(), atol=1e-12, rtol=1e-10
+    )
+    np.testing.assert_allclose(
+        adjoint_false.as_array(), expected_adjoint_false.as_array(), atol=1e-12, rtol=1e-10
+    )
+
+    # The two settings must actually differ, otherwise the test is vacuous.
+    assert not np.allclose(direct_true, direct_false.as_array(), atol=1e-6, rtol=1e-5)
+    assert np.linalg.norm(direct_true - direct_false.as_array()) > 1e-3
+
+    operator.set_parameters({"normalize_features": True})
+    direct_back = operator.direct(emission).as_array()
+    adjoint_back = operator.adjoint(adjoint_input).as_array()
+
+    np.testing.assert_allclose(direct_back, expected_direct_true.as_array(), atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(adjoint_back, expected_adjoint_true.as_array(), atol=1e-12, rtol=1e-10)
+    np.testing.assert_allclose(direct_back, direct_true, atol=1e-12, rtol=1e-10)
+
+
+@pytest.mark.parametrize("use_mask", [False, True])
+def test_toggling_normalize_features_invalidates_caches(geometry, use_mask):
+    params = _toggle_params(use_mask)
+    operator = get_kernel_operator(geometry, normalize_features=True, **params)
+    operator.set_anatomical_image(make_image(geometry, _varying_anatomy_array(geometry)))
+    operator.direct(geometry.allocate(1.0))
+
+    if use_mask:
+        assert operator.mask is not None
+    assert operator._anatomical_weights is not None
+    assert operator._normalisation_map is not None
+    operator.set_norm(1.0)
+
+    operator.set_parameters({"normalize_features": False})
+
+    assert operator.mask is None
+    assert operator._anatomical_weights is None
+    assert operator._normalisation_map is None
+    assert operator._norm is None
+
+
+def test_toggling_normalize_features_before_anatomy_set(geometry):
+    operator = get_kernel_operator(
+        geometry, backend="numba", normalize_features=True, use_mask=False
+    )
+    operator.set_parameters({"normalize_features": False})
+
+    assert operator.anatomical_image is None
+    assert operator._raw_anatomical_image is None
+
+    anat_arr = _varying_anatomy_array(geometry)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
+    # The later setting must be honoured when the anatomy is finally supplied.
+    np.testing.assert_array_equal(operator.anatomical_image.as_array(), anat_arr)
+
+    fresh = get_kernel_operator(
+        geometry, backend="numba", normalize_features=False, use_mask=False
+    )
+    fresh.set_anatomical_image(make_image(geometry, anat_arr))
+    rng = np.random.default_rng(3)
+    emission = make_image(geometry, rng.normal(size=geometry.shape))
+    np.testing.assert_allclose(
+        operator.direct(emission).as_array(), fresh.direct(emission).as_array(), atol=1e-12, rtol=1e-10
+    )
+
+
+def test_repeated_same_setting_does_not_renormalize(geometry):
+    operator = get_kernel_operator(
+        geometry, backend="numba", normalize_features=True, use_mask=False
+    )
+    anat_arr = _varying_anatomy_array(geometry)
+    operator.set_anatomical_image(make_image(geometry, anat_arr))
+
+    processed = operator.anatomical_image
+    expected = anat_arr / anat_arr.std()
+
+    for _ in range(3):
+        operator.set_parameters({"normalize_features": True})
+
+    # A no-op update must not rebuild (and therefore cannot double-normalise).
+    assert operator.anatomical_image is processed
+    assert np.allclose(operator.anatomical_image.as_array(), expected, rtol=1e-6, atol=1e-6)
+    assert np.allclose(operator._raw_anatomical_image.as_array(), anat_arr, rtol=1e-6, atol=1e-6)
+
+
+def test_replacement_anatomy_rebuilds_from_new_snapshot(geometry):
+    operator = get_kernel_operator(
+        geometry, backend="numba", normalize_features=True, use_mask=False
+    )
+    first = _varying_anatomy_array(geometry)
+    second = 0.1 * (np.indices(geometry.shape).astype(np.float64).sum(axis=0) + 1.0)
+
+    operator.set_anatomical_image(make_image(geometry, first))
+    operator.set_anatomical_image(make_image(geometry, second))
+
+    np.testing.assert_allclose(operator._raw_anatomical_image.as_array(), second, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(
+        operator.anatomical_image.as_array(), second / second.std(), rtol=1e-6, atol=1e-6
+    )
+
+    operator.set_parameters({"normalize_features": False})
+    np.testing.assert_allclose(operator.anatomical_image.as_array(), second, rtol=1e-6, atol=1e-6)
+
+
+def test_constant_anatomy_normalisation_fallback(geometry):
+    operator = get_kernel_operator(
+        geometry, backend="numba", normalize_features=True, use_mask=False
+    )
+    operator.set_anatomical_image(geometry.allocate(3.0))
+
+    # std <= 1e-12: the raw values are kept unscaled.
+    np.testing.assert_allclose(operator.anatomical_image.as_array(), 3.0, rtol=1e-12, atol=1e-12)
+
+    operator.set_parameters({"normalize_features": False})
+    np.testing.assert_allclose(operator.anatomical_image.as_array(), 3.0, rtol=1e-12, atol=1e-12)
+
+    operator.set_parameters({"normalize_features": True})
+    np.testing.assert_allclose(operator.anatomical_image.as_array(), 3.0, rtol=1e-12, atol=1e-12)
+
+
+def test_caller_mutation_does_not_change_snapshot(geometry):
+    operator = get_kernel_operator(
+        geometry, backend="numba", normalize_features=True, use_mask=False
+    )
+    anat_arr = _varying_anatomy_array(geometry)
+    anatomy = make_image(geometry, anat_arr)
+    operator.set_anatomical_image(anatomy)
+
+    stored_raw = operator._raw_anatomical_image.as_array().copy()
+    stored_processed = operator.anatomical_image.as_array().copy()
+
+    # Mutate the caller's container in place after setting it.
+    anatomy.fill(anat_arr + 1000.0)
+
+    np.testing.assert_array_equal(operator._raw_anatomical_image.as_array(), stored_raw)
+    np.testing.assert_array_equal(operator.anatomical_image.as_array(), stored_processed)
+
+    # A later toggle must rebuild from the pristine snapshot, not the caller's data.
+    operator.set_parameters({"normalize_features": False})
+    np.testing.assert_array_equal(operator.anatomical_image.as_array(), stored_raw)
+
+
 def test_normalize_features_scales_anatomical_image(geometry):
     operator = get_kernel_operator(
         geometry,

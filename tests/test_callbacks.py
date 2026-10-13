@@ -101,9 +101,52 @@ def test_save_schedule_files_and_arrays(signed_start, tmp_path):
 
     start = signed_start.as_array()
     for name, iteration in [("iter_0000", 0), ("iter_0001", 1), ("iter_0002", 2), ("iter_0004", 4)]:
-        saved = load_image(output_dir / f"{name}.nii.gz").as_array()
+        saved_image = load_image(output_dir / f"{name}.nii.gz")
+        saved = saved_image.as_array()
         np.testing.assert_allclose(saved, np.maximum(start - iteration, 0), rtol=1e-5, atol=1e-6)
         assert saved.min() >= 0
+
+        geometry = saved_image.geometry
+        assert (geometry.voxel_size_x, geometry.voxel_size_y, geometry.voxel_size_z) == pytest.approx(
+            (1.0, 1.0, 1.0)
+        )
+        assert (geometry.center_x, geometry.center_y, geometry.center_z) == pytest.approx(
+            (0.0, 0.0, 0.0)
+        )
+
+
+def test_save_callback_preserves_custom_geometry(tmp_path):
+    """Saved files retain the solution geometry's spacing and centre."""
+    geometry = ImageGeometry(
+        voxel_num_x=8,
+        voxel_num_y=6,
+        voxel_num_z=4,
+        voxel_size_x=2.0,
+        voxel_size_y=3.0,
+        voxel_size_z=4.0,
+        center_x=13.0,
+        center_y=-4.0,
+        center_z=7.0,
+    )
+    start = geometry.allocate(0.0)
+    start.fill(np.arange(1, 193, dtype=np.float32).reshape(4, 6, 8))
+
+    algorithm = SignedAlgorithm(start)
+    callback = SaveIterationCallback(tmp_path / "iterations", interval=1, save_first_n=0)
+    algorithm.run(iterations=1, callbacks=[callback], verbose=0)
+
+    saved_image = load_image(tmp_path / "iterations" / "iter_0000.nii.gz")
+    saved_geometry = saved_image.geometry
+    assert (
+        saved_geometry.voxel_size_x,
+        saved_geometry.voxel_size_y,
+        saved_geometry.voxel_size_z,
+    ) == pytest.approx((2.0, 3.0, 4.0))
+    assert (
+        saved_geometry.center_x,
+        saved_geometry.center_y,
+        saved_geometry.center_z,
+    ) == pytest.approx((13.0, -4.0, 7.0))
 
 
 def test_save_leaves_signed_solution_unchanged(signed_start, tmp_path):

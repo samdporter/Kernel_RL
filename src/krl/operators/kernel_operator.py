@@ -90,6 +90,11 @@ class BaseKernelOperator(LinearOperator):
         default_parameters = DEFAULT_PARAMETERS.copy()
         self.parameters = default_parameters | kwargs
         self.anatomical_image = None
+        # Owned, unprocessed snapshot of the supplied anatomy. ``normalize_features``
+        # is re-applied from this snapshot so toggling it can rebuild
+        # ``anatomical_image`` without re-reading (or mutating) the caller's
+        # array. Memory cost: one extra full-volume snapshot.
+        self._raw_anatomical_image = None
         self.mask = None
         self.backend = "numba"
         self.freeze_emission_kernel = False
@@ -103,31 +108,52 @@ class BaseKernelOperator(LinearOperator):
         self._normalisation_map = None
         self.set_norm(None)
 
-    def set_parameters(self, parameters):
-        """Update operator parameters and invalidate derived state.
+    def _prepare_anatomical_features(self, raw_image):
+        """Derive ``anatomical_image`` from an owned raw snapshot.
 
-        ``normalize_features`` only takes effect when the anatomical image is
-        set, so toggling it here has no effect on an already-set image.
+        ``normalize_features`` divides the raw intensities by their standard
+        deviation (no mean subtraction); a near-constant image is left
+        unscaled. The result is a fresh clone, so the snapshot stays unmodified
+        and the feature state always matches the current parameters.
         """
+        arr = get_array(raw_image)
+        if self.parameters["normalize_features"]:
+            std = arr.std()
+            arr = arr / std if std > 1e-12 else arr
+        image = raw_image.clone()
+        image.fill(arr)
+        return image
+
+    def set_parameters(self, parameters):
+        """Update operator parameters, rebuilding features when needed.
+
+        Toggling ``normalize_features`` re-derives ``anatomical_image`` from the
+        owned raw snapshot. Every update invalidates the derived caches (mask,
+        anatomical weights, normalisation map and norm).
+        """
+        normalize_before = self.parameters["normalize_features"]
         self.parameters.update(parameters)
+        if (
+            self.parameters["normalize_features"] != normalize_before
+            and self._raw_anatomical_image is not None
+        ):
+            self.anatomical_image = self._prepare_anatomical_features(
+                self._raw_anatomical_image
+            )
         self._invalidate_derived_state()
 
     def set_anatomical_image(self, image):
-        """Set the anatomical image, applying ``normalize_features`` here.
+        """Store an owned raw snapshot and derive the processed features.
 
-        Because normalisation happens at this point, toggling
-        ``normalize_features`` later via ``set_parameters`` does not re-process
-        an already-set image; call this method again to apply the new setting.
+        The supplied image is cloned before any processing, so later caller
+        mutation cannot change the operator's anatomy, and toggling
+        ``normalize_features`` rebuilds ``anatomical_image`` from the snapshot
+        rather than feeding processed features back in.
         """
-        if self.parameters["normalize_features"]:
-            arr = get_array(image)
-            std = arr.std()
-            norm = arr / std if std > 1e-12 else arr
-            tmp = image.clone()
-            tmp.fill(norm)
-            self.anatomical_image = tmp
-        else:
-            self.anatomical_image = image
+        self._raw_anatomical_image = image.clone()
+        self.anatomical_image = self._prepare_anatomical_features(
+            self._raw_anatomical_image
+        )
         self._invalidate_derived_state()
 
     @staticmethod

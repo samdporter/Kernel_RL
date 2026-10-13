@@ -27,6 +27,12 @@ followed by a clamp to non-negative values. `A` is the blur alone (with a kernel
 operator it becomes `blur ∘ kernel`, which is KRL). The reported objective
 (`rl.loss`) is the KL divergence between `A x` and the observed data `y`.
 
+The Gaussian blur operator zero-pads at the volume boundary on all three
+backends (`numba`, `torch`, `scipy`), so they share a common zero-padding
+boundary condition — numerical results still depend on the backend's
+computational dtype. (Kernel neighbourhoods are separate: they are extended by
+mirror reflection, see below.)
+
 More iterations sharpen the reconstruction and also amplify noise; choose the
 iteration count with a callback (for example `NRMSECallback` against a phantom).
 
@@ -240,6 +246,27 @@ smoothing of the kernel.
     initial `z`-gradient equal to `P(x0) ⊙ ∇F(x0)`, the EM-preconditioned
     gradient direction `MAPRL` takes from the same initial estimate. `MAPRL`
     may refresh a callable `P` during a run; the L-BFGS-B map is fixed.
+  - `objective[0]`/`loss[0]` is `F(x_start)` where `x_start` is the supplied
+    estimate projected onto the bounds (the estimate itself when
+    non-negativity is not enforced), recorded for every run length — `run(0)`
+    and `run(-1)` leave this single entry in place.
+- `MAPRL(eps_preconditioner=...)` is deprecated and has no effect: supplying a
+  value emits a `FutureWarning`. Apply stabilisation inside the preconditioner
+  instead.
+
+## Image I/O
+
+- `load_image` handles 3-D `.nii` / `.nii.gz` volumes only (singleton and
+  zero-size axes are rejected on load); `save_image` accepts 2-D and 3-D
+  `ImageData`.
+- Loading keeps the NIfTI translation through the CIL geometry centre and the
+  source dtype (float32 → float32, float64 → float64, integers → float64);
+  flips, axis permutations, rotation and shear in the affine are rejected, as
+  are complex/RGB/structured volumes. Out-of-range int64 values warn about
+  possible rounding.
+- `save_image` accepts a CIL `ImageData` only (a raw array raises `TypeError`)
+  and writes an origin derived from the geometry centre; original NIfTI header
+  fields and qform/sform codes are not retained.
 
 ## Comparison
 

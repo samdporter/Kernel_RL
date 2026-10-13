@@ -141,3 +141,53 @@ def test_adjoint_dot_product_identity(geometry, anatomy, emission, adjoint_input
     rhs = float(np.vdot(x, aty))
     denom = max(abs(lhs), abs(rhs), 1.0)
     assert abs(lhs - rhs) / denom < 1e-6
+
+
+@pytest.mark.parametrize("use_mask", [False, True], ids=["dense", "sparse"])
+def test_toggle_normalize_features_rebuilds_and_invalidates_caches(
+    geometry, anatomy, emission, adjoint_input, use_mask
+):
+    """Toggling normalize_features must rebuild the MPS features from the raw
+    snapshot and match the numba reference, clearing the device caches."""
+    mps, reference = make_operators(geometry, use_mask, hybrid=False)
+    mps.set_anatomical_image(anatomy)
+    reference.set_anatomical_image(anatomy)
+
+    direct_true = mps.direct(emission).as_array()
+    np.testing.assert_allclose(
+        direct_true, reference.direct(emission).as_array(), rtol=RTOL, atol=ATOL
+    )
+    adjoint_true = mps.adjoint(adjoint_input).as_array()
+    np.testing.assert_allclose(
+        adjoint_true, reference.adjoint(adjoint_input).as_array(), rtol=RTOL, atol=ATOL
+    )
+
+    assert mps._normalisation_map_cpu is not None
+    if use_mask:
+        assert mps._mask_cpu is not None
+
+    mps.set_parameters({"normalize_features": False})
+    reference.set_parameters({"normalize_features": False})
+
+    assert mps._mask_gpu is None
+    assert mps._mask_cpu is None
+    assert mps._normalisation_map_gpu is None
+    assert mps._normalisation_map_cpu is None
+
+    direct_false = mps.direct(emission).as_array()
+    np.testing.assert_allclose(
+        direct_false, reference.direct(emission).as_array(), rtol=RTOL, atol=ATOL
+    )
+    adjoint_false = mps.adjoint(adjoint_input).as_array()
+    np.testing.assert_allclose(
+        adjoint_false, reference.adjoint(adjoint_input).as_array(), rtol=RTOL, atol=ATOL
+    )
+    assert not np.allclose(direct_true, direct_false)
+
+    mps.set_parameters({"normalize_features": True})
+    reference.set_parameters({"normalize_features": True})
+
+    direct_back = mps.direct(emission).as_array()
+    np.testing.assert_allclose(direct_back, direct_true, rtol=RTOL, atol=ATOL)
+    adjoint_back = mps.adjoint(adjoint_input).as_array()
+    np.testing.assert_allclose(adjoint_back, adjoint_true, rtol=RTOL, atol=ATOL)

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-10-13
+
+### Fixed
+- `save_image` now rejects non-`ImageData` input with `TypeError` instead of
+  silently transposing a raw ndarray.
+- NIfTI loading preserves the translation through the CIL geometry centre
+  (previously silently discarded) and rejects affines it cannot represent
+  (flips, axis permutations, rotation, shear) with a clear error; saving writes
+  a geometry-derived origin instead of a zero-origin affine.
+- `load_nifti_as_imagedata` preserves the source floating dtype (float32→float32,
+  float64→float64; integer→float64) instead of always downcasting to float32;
+  complex/RGB/structured inputs are rejected; out-of-range int64 warns about
+  possible rounding.
+- The scipy blur backend now zero-pads at boundaries like the numba and torch
+  backends (previously reflected), so all three backends share a common
+  zero-padding boundary condition (numerical results still depend on the
+  backend's computational dtype).
+- `DirectionalOperator.dot` returns an independent result instead of a shared
+  internal buffer.
+- Toggling `normalize_features` via `set_parameters` now rebuilds the processed
+  anatomy from an owned raw snapshot instead of being a silent no-op.
+- `LBFGSBOptimizer` records its first objective at the bound-projected start for
+  every run length, so negative initial estimates no longer produce an
+  inconsistent first history entry.
+
+### Changed
+- `GaussianBlurringOperator` scipy results change near boundaries (now
+  zero-padded); `save_image` writes a geometry-derived origin; loaded image
+  storage uses the source dtype (float64/int inputs use 8 bytes/voxel instead
+  of 4).
+
+### Deprecated
+- `MAPRL(eps_preconditioner=...)` is deprecated and has no effect; a
+  `FutureWarning` is emitted if a value is supplied (apply stabilisation inside
+  the preconditioner instead).
+
 ## [0.4.0] - 2026-10-12
 
 ### Fixed

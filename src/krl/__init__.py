@@ -9,7 +9,7 @@ anatomical guidance for PET imaging, including:
 - L-BFGS-B with Directional Total Variation (DTV)
 """
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 __author__ = "Sam Porter, Kjell Erlandsson, Daniel Deidda, Kris Thielemans"
 
 from krl.algorithms.lbfgsb import LBFGSBOptimizer, LBFGSBOptions

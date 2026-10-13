@@ -86,11 +86,11 @@ class DirectionalOperator(LinearOperator):
         """
         Inner product of two block containers.
 
-        The returned container is an internal buffer reused by this operator:
-        it is overwritten by every subsequent ``dot`` call, so clone it if the
-        result must be kept.
+        Returns an independent copy of the result; the internal scratch buffer
+        is reused across calls, but each returned container is unaffected by
+        subsequent ``dot``, ``direct`` or ``adjoint`` calls.
         """
         self.tmp.fill(0)
         for el_x, el_y in zip(x.containers, y.containers):
             self.tmp += el_x * el_y
-        return self.tmp
+        return self.tmp.clone()

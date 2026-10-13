@@ -83,19 +83,35 @@ def test_directional_operator_dot_resets_accumulator(directional_geometry):
         make_image(directional_geometry, [[1.5, 2.0], [0.0, 1.0]]),
     )
 
-    dot_a = operator.dot(block_a, block_a).as_array()
+    dot_a = operator.dot(block_a, block_a)
+    dot_a_view = dot_a.as_array()
     expected_a = (
         block_a.containers[0].as_array() * block_a.containers[0].as_array()
         + block_a.containers[1].as_array() * block_a.containers[1].as_array()
     )
-    assert np.allclose(dot_a, expected_a)
+    assert np.allclose(dot_a_view, expected_a)
 
-    dot_b = operator.dot(block_a, block_b).as_array()
+    dot_b = operator.dot(block_a, block_b)
     expected_b = (
         block_a.containers[0].as_array() * block_b.containers[0].as_array()
         + block_a.containers[1].as_array() * block_b.containers[1].as_array()
     )
-    assert np.allclose(dot_b, expected_b)
+    assert np.allclose(dot_b.as_array(), expected_b)
+    assert dot_b is not dot_a
+    assert np.allclose(dot_a_view, expected_a)
+
+    operator.direct(block_a)
+    operator.adjoint(block_a)
+    assert np.allclose(dot_a_view, expected_a)
+    assert np.allclose(dot_b.as_array(), expected_b)
+
+    block_a_copy = block_a.containers[0].as_array().copy()
+    block_b_copy = block_b.containers[0].as_array().copy()
+    dot_b_view = dot_b.as_array().copy()
+    dot_a_view[:] = -1.0
+    assert np.allclose(block_a.containers[0].as_array(), block_a_copy)
+    assert np.allclose(block_b.containers[0].as_array(), block_b_copy)
+    assert np.allclose(dot_b.as_array(), dot_b_view)
 
 
 @pytest.mark.parametrize("eta", [0.0, -0.5])

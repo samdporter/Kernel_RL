@@ -21,7 +21,7 @@ ecosystem (callbacks, functions, block operators, ...).
 
 Install CIL **first** — it is distributed via conda (conda-forge + ccpi
 channels), not PyPI, and is a separate package from `cil-krl`. Then install
-`cil-krl` from PyPI (the current release is 0.4.0):
+`cil-krl` from PyPI (the current release is 0.4.1):
 
 ```bash
 pip install cil-krl
@@ -185,8 +185,9 @@ python examples/rl_krl_dtv.py
 
 ### Boundary conditions
 
-- The numba and torch blur backends **zero-pad** at the volume boundary; the
-  scipy backend uses **reflection**.
+- All three blur backends (`numba`, `torch`, `scipy`) **zero-pad** at the
+  volume boundary, so they share a common boundary condition (numerical results
+  still depend on the backend's computational dtype).
 - The kernel operator uses inclusive mirror reflection of its neighbourhood at
   the volume boundaries on both backends.
 
@@ -218,6 +219,15 @@ python examples/rl_krl_dtv.py
   changes between iterations. Freezing is a modelling choice; no convergence
   rate is claimed for it.
 
+### Parameters
+
+- `normalize_features` can be toggled after construction via `set_parameters`;
+  the change takes effect, because the processed anatomy is rebuilt from an
+  owned snapshot of the raw anatomical image.
+- `MAPRL(eps_preconditioner=...)` is deprecated and has no effect; supplying a
+  value emits a `FutureWarning`. Apply any stabilisation inside the
+  preconditioner instead.
+
 ### L-BFGS-B
 
 - `LBFGSBOptimizer` is a thin wrapper around `scipy.optimize.minimize(method=
@@ -234,9 +244,16 @@ python examples/rl_krl_dtv.py
 
 ### Image I/O
 
-- `load_image` / `save_image` accept only 3-D `.nii` / `.nii.gz` volumes
-  (singleton axes are rejected on load). Saved files record voxel values and
-  voxel spacing only — no original NIfTI header or affine is preserved.
+- `load_image` accepts only 3-D `.nii` / `.nii.gz` volumes (singleton axes are
+  rejected on load); `save_image` accepts 2-D and 3-D `ImageData`.
+- Loading preserves the NIfTI translation through the CIL geometry centre and
+  the source dtype (float32→float32, float64→float64, integers→float64);
+  affines CIL cannot represent (flips, axis permutations, rotation, shear) and
+  complex/RGB/structured volumes are rejected with a clear error. Out-of-range
+  int64 values warn about possible rounding.
+- `save_image` requires a CIL `ImageData` (a raw ndarray raises `TypeError`)
+  and writes an origin derived from the geometry centre. Original NIfTI header
+  fields and qform/sform codes are not retained.
 
 ## Development
 
