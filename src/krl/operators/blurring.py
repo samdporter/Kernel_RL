@@ -31,6 +31,19 @@ def _numba_convolve_3d(x, psf):
 
 
 class GaussianBlurringOperator(LinearOperator):
+    """Gaussian blurring of a single-channel 3-D volume.
+
+    All backends ('numba', 'torch', 'scipy') use the same boundary condition:
+    the volume is extended by zeros outside its domain (zero-padding), so
+    blurred values are attenuated near the faces, edges and corners. This
+    changed the scipy backend's behaviour relative to 0.4.0, which reflected
+    at the boundary instead; numba and torch are unchanged.
+
+    The Gaussian PSF is centred and point-symmetric, so the zero-padded
+    operator is self-adjoint on every backend; the adjoint nevertheless
+    applies the flipped PSF explicitly.
+    """
+
     def __init__(self, sigma, domain_geometry, backend='auto'):
         if backend not in _BACKENDS:
             raise ValueError(
@@ -135,7 +148,7 @@ class GaussianBlurringOperator(LinearOperator):
             blurred = _numba_convolve_3d(arr, self.psf)
         else:  # scipy
             from scipy.ndimage import convolve
-            blurred = convolve(arr, self.psf, mode='reflect')
+            blurred = convolve(arr, self.psf, mode='constant', cval=0.0)
         if out is None:
             out = x.clone()
         out.fill(blurred)
@@ -160,7 +173,7 @@ class GaussianBlurringOperator(LinearOperator):
             result = _numba_convolve_3d(arr, psf_flipped)
         else:
             from scipy.ndimage import correlate
-            result = correlate(arr, self.psf, mode='reflect')
+            result = correlate(arr, self.psf, mode='constant', cval=0.0)
         if out is None:
             out = x.clone()
         out.fill(result)

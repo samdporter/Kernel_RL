@@ -72,10 +72,17 @@ class LBFGSBOptimizer:
       unpreconditioned optimiser.
     * ``m`` is fixed for the whole run; callables or state-dependent maps are
       out of scope.
-    * ``objective[0]``/``loss[0]`` is ``F(initial_estimate)`` evaluated before
-      the non-negativity bounds are applied, so with negative initial entries
-      the first recorded value may not correspond to the first iterate SciPy
-      visits.
+    * Every run starts from ``x_start``, the supplied estimate projected onto
+      the bounds: ``max(initial_estimate, 0)`` when ``enforce_non_negativity``
+      is set, the estimate itself otherwise. ``objective[0]``/``loss[0]`` is
+      ``F(x_start)`` for every run length, so ``run(-1)``, ``run(0)`` and
+      ``run(n > 0)`` record the same first value, and with ``n > 0`` SciPy is
+      handed the corresponding transformed start. The caller's image and
+      ``initial_estimate`` are never mutated.
+    * A non-positive ``iterations`` initialises and projects the solution but
+      performs no optimisation: no SciPy call, no callbacks, ``iteration`` stays
+      ``0`` and ``result`` is ``None``. It is therefore not a strict
+      state-preserving no-op.
     """
 
     def __init__(
@@ -164,7 +171,13 @@ class LBFGSBOptimizer:
         return self._diag * grad_x
 
     def run(self, iterations: int, callbacks: Optional[Iterable] = None, verbose: int = 0):
-        """Execute the optimisation for a maximum number of iterations."""
+        """Execute the optimisation for a maximum number of iterations.
+
+        The solution is reset from ``initial_estimate``, projected onto the
+        bounds when ``enforce_non_negativity`` is set, and ``objective[0]`` is
+        ``F`` of that projected start. A non-positive ``iterations`` only does
+        that initialisation/projection and returns without calling SciPy.
+        """
         callbacks = list(callbacks) if callbacks else []
         self.result = None
         self.iteration = 0
@@ -172,8 +185,12 @@ class LBFGSBOptimizer:
         self.loss = self._objective
         self._last_fun_value = None
 
-        # Reset solution to the starting point
+        # Reset solution from the stored estimate and project it onto the
+        # bounds, so objective[0] is F at the first iterate SciPy visits.
         self.solution.fill(self.initial_estimate.as_array())
+        if self.options.enforce_non_negativity:
+            with np.errstate(invalid="ignore"):
+                self.solution.maximum(0, out=self.solution)
         x0 = _ImageArrayAdapter.image_to_array(self.solution)
 
         initial_obj = self._objective_from_array(x0)

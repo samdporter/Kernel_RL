@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SIRF activity scale**: `simulate_inputs` records `scale` in manifest; contract test validates high-count invariance.
 - Repaired the historical example pipeline and scripts: the pipeline uses the package's `create_gaussian_blur` (dropping the CIL `BlurringOperator` fallback and its ineffective `--psf-kernel-size` option), sweeps import from `examples.pipelines` and run under the checkout root, the reconstruction wrapper delegates to the package `RichardsonLucy`, the benchmark script no longer imports torch at module import, the poster script uses checkout-relative output paths and creates them, and the BrainWeb runner makes the checkout root importable.
 - Ported the 0.4.0 correctness fixes from master (`ae5d410`): operator, algorithm, callback and utils fixes plus their tests; release metadata remains on paper's 0.3.0 line.
+- Ported the 0.4.1 correctness fixes from master (`1d2eb70`): I/O, blur, directional and preconditioner fixes plus their tests; release metadata remains on paper's 0.3.0 line.
 
 ### Changed
 - Quarantined pre-fix local artifacts (`results/`, `plans/`, `data/brainweb/`, `data/patients/MK-H001/`) into `invalidated_2026-08-27/` with README. These must not be reused.

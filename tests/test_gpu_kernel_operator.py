@@ -1314,6 +1314,207 @@ class TestTorchCPUFallbackDelegate:
         assert np.all(np.isfinite(operator.adjoint(emission).as_array()))
 
 
+class TestNormalizeFeaturesToggleCPUDelegate:
+    """Toggling normalize_features on the torch CPU delegation path.
+
+    The public ``device="cpu"`` path delegates to the numba backend, so this
+    validates parameter propagation and cache invalidation, not the CUDA/MPS
+    kernels.
+    """
+
+    PARAMS = dict(
+        num_neighbours=3,
+        sigma_anat=0.3,
+        sigma_dist=1.0,
+        normalize_kernel=True,
+        hybrid=False,
+    )
+
+    @staticmethod
+    def _anatomy(geometry):
+        coords = np.indices(geometry.shape, dtype=np.float64)
+        return 20.0 * (coords[0] + coords[1] + coords[2])
+
+    def _make(self, geometry, anatomy, normalize_features, use_mask):
+        params = dict(self.PARAMS)
+        params["use_mask"] = use_mask
+        if use_mask:
+            params["mask_k"] = 10
+        op = get_kernel_operator(
+            geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float64',
+            normalize_features=normalize_features,
+            **params,
+        )
+        op.set_anatomical_image(anatomy)
+        return op
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    def test_toggle_matches_fresh_and_invalidates_caches(self, small_geometry, use_mask):
+        geometry = small_geometry
+        anatomy = DummyImage(self._anatomy(geometry).astype(np.float32))
+        rng = np.random.default_rng(101)
+        x = DummyImage(rng.normal(size=geometry.shape).astype(np.float32))
+        y = DummyImage(rng.normal(size=geometry.shape).astype(np.float32))
+
+        op = self._make(geometry, anatomy, True, use_mask)
+        op.precompute_mask()
+        direct_true = op.direct(x).as_array()
+        adjoint_true = op.adjoint(y).as_array()
+        if use_mask:
+            assert op._mask_cpu is not None
+        assert op._normalisation_map_cpu is not None
+
+        op.set_parameters({"normalize_features": False})
+        assert op._mask_gpu is None
+        assert op._mask_cpu is None
+        assert op._normalisation_map_gpu is None
+        assert op._normalisation_map_cpu is None
+        assert op.mask is None
+        assert op._anatomical_weights is None
+        assert op._normalisation_map is None
+        assert op._norm is None
+
+        direct_false = op.direct(x).as_array()
+        adjoint_false = op.adjoint(y).as_array()
+
+        fresh_false = self._make(geometry, anatomy, False, use_mask)
+        np.testing.assert_allclose(
+            direct_false, fresh_false.direct(x).as_array(), atol=1e-10, rtol=1e-8
+        )
+        fresh_false_adjoint = self._make(geometry, anatomy, False, use_mask)
+        fresh_false_adjoint.direct(x)
+        np.testing.assert_allclose(
+            adjoint_false, fresh_false_adjoint.adjoint(y).as_array(), atol=1e-10, rtol=1e-8
+        )
+        assert not np.allclose(direct_true, direct_false)
+
+        op.set_parameters({"normalize_features": True})
+        assert op._mask_cpu is None
+        assert op._normalisation_map_cpu is None
+        direct_back = op.direct(x).as_array()
+        adjoint_back = op.adjoint(y).as_array()
+        np.testing.assert_allclose(direct_back, direct_true, atol=1e-10, rtol=1e-8)
+        np.testing.assert_allclose(adjoint_back, adjoint_true, atol=1e-10, rtol=1e-8)
+
+    def test_toggle_before_anatomy_set(self, small_geometry):
+        op = get_kernel_operator(
+            small_geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float64',
+            normalize_features=True,
+            use_mask=True,
+            mask_k=10,
+            **self.PARAMS,
+        )
+        op.set_parameters({"normalize_features": False})
+        assert op.anatomical_image is None
+        assert op._raw_anatomical_image is None
+
+        anatomy = DummyImage(self._anatomy(small_geometry).astype(np.float32))
+        op.set_anatomical_image(anatomy)
+        np.testing.assert_array_equal(
+            op.anatomical_image.as_array(), anatomy.as_array()
+        )
+
+
+class TestNativeNormalizeFeaturesToggle:
+    """Native torch forward helpers must honour the toggled feature state.
+
+    These call the private ``_torch_*`` helpers on CPU tensors, so the CUDA/MPS
+    kernels themselves remain unverified on CPU-only hosts.
+    """
+
+    @staticmethod
+    def _anatomy(geometry):
+        coords = np.indices(geometry.shape, dtype=np.float64)
+        return 20.0 * (coords[0] + coords[1] + coords[2])
+
+    @pytest.mark.parametrize("use_mask", [False, True])
+    def test_native_forward_matches_numba_after_toggle(self, small_geometry, use_mask):
+        params = dict(
+            num_neighbours=3,
+            sigma_anat=0.3,
+            sigma_dist=1.0,
+            sigma_emission=0.5,
+            normalize_kernel=False,
+            use_mask=use_mask,
+            distance_weighting=False,
+            hybrid=False,
+        )
+        if use_mask:
+            params["mask_k"] = 10
+
+        anatomy = DummyImage(self._anatomy(small_geometry).astype(np.float32))
+        torch_op = get_kernel_operator(
+            small_geometry,
+            backend='torch',
+            device='cpu',
+            dtype='float32',
+            normalize_features=True,
+            **params,
+        )
+        torch_op.set_anatomical_image(anatomy)
+        torch_op.set_parameters({"normalize_features": False})
+
+        numba_op = get_kernel_operator(
+            small_geometry, backend='numba', normalize_features=False, **params
+        )
+        numba_op.set_anatomical_image(anatomy)
+
+        rng = np.random.default_rng(202)
+        x_arr = rng.normal(size=small_geometry.shape).astype(np.float32)
+        reference = numba_op.direct(DummyImage(x_arr)).as_array()
+
+        anat_tensor = torch.from_numpy(
+            np.ascontiguousarray(
+                torch_op._validate_anatomical_image(), dtype=torch_op.numpy_dtype
+            )
+        ).to(torch_op.device)
+        x_tensor = torch.from_numpy(
+            np.ascontiguousarray(x_arr, dtype=torch_op.numpy_dtype)
+        ).to(torch_op.device)
+        norm_tensor = torch.zeros(
+            (1, 1, 1), dtype=torch_op.torch_dtype, device=torch_op.device
+        )
+
+        if use_mask:
+            mask_cpu = torch_op._get_mask_cpu(dtype=torch.int16)
+            result = torch_op._torch_kernel_forward_sparse(
+                x_tensor,
+                x_tensor,
+                anat_tensor,
+                mask_cpu,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                False,
+                False,
+                False,
+            )
+        else:
+            result = torch_op._torch_kernel_forward_dense(
+                x_tensor,
+                x_tensor,
+                anat_tensor,
+                norm_tensor,
+                3,
+                torch_op.parameters["sigma_anat"],
+                torch_op.parameters["sigma_dist"],
+                torch_op.parameters["sigma_emission"],
+                False,
+                False,
+                False,
+            )
+
+        np.testing.assert_allclose(result.cpu().numpy(), reference, rtol=1e-3, atol=1e-5)
+
+
 @pytest.mark.skipif(not CUDA_AVAILABLE, reason="CUDA not available")
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_cuda_dtype_forward_adjoint_dot_product(dtype):

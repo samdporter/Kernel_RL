@@ -1,10 +1,18 @@
 """Tests for MAPRL preconditioner and Armijo scheduling functionality."""
 
+import warnings
+
 import numpy as np
 import pytest
 from cil.framework import ImageGeometry
 
 from krl.algorithms.maprl import MAPRL
+
+EPS_PRECONDITIONER_DEPRECATION = (
+    "eps_preconditioner is deprecated and has no effect. Apply stabilisation "
+    "inside the supplied preconditioner. The eps parameter affects only the "
+    "unpreconditioned EM scaling."
+)
 
 
 def make_image(geometry, value):
@@ -274,6 +282,146 @@ def test_maprl_preconditioner_static_image(geometry):
     assert np.allclose(maprl._preconditioner_image.as_array(), static_preconditioner.as_array())
 
 
+def construct_recording_warnings(geometry, **kwargs):
+    """Build a plain MAPRL through ``make_maprl`` and collect every warning."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        maprl = make_maprl(geometry, **kwargs)
+    return maprl, caught
+
+
+def test_eps_preconditioner_omitted_emits_no_warning(geometry):
+    """Omitting the argument stays silent and keeps the legacy stored value."""
+    maprl, caught = construct_recording_warnings(geometry)
+
+    assert caught == []
+    assert maprl.eps_preconditioner == 1e-6
+
+
+@pytest.mark.parametrize("value", [1e-6, 0, 1e-3, 1e6])
+def test_eps_preconditioner_explicit_value_warns_once(geometry, value):
+    """An explicit value warns exactly once, from the caller's frame."""
+    maprl, caught = construct_recording_warnings(geometry, eps_preconditioner=value)
+
+    assert len(caught) == 1
+    assert issubclass(caught[0].category, FutureWarning)
+    assert EPS_PRECONDITIONER_DEPRECATION in str(caught[0].message)
+    # stacklevel=2 points at the constructing frame, not inside maprl.py.
+    assert caught[0].filename == __file__
+    assert maprl.eps_preconditioner == value
+
+    with warnings.catch_warnings(record=True) as during_run:
+        warnings.simplefilter("always")
+        maprl.run(iterations=2, verbose=0)
+
+    assert during_run == []
+
+
+@pytest.mark.parametrize("initial_line_search", [False, True])
+@pytest.mark.parametrize("preconditioner_kind", ["absent", "static", "callable"])
+def test_eps_preconditioner_changes_no_behaviour(
+    geometry, preconditioner_kind, initial_line_search
+):
+    """The deprecated value leaves the update, the search and the map alone."""
+    supplied_map = np.array([[0.0, 0.5, 1.0, 2.0]] * 4, dtype=np.float64)
+    recorded_maps = []
+
+    def callable_preconditioner(x):
+        image = x.geometry.allocate(0.0, dtype=np.float64)
+        image.as_array()[...] = supplied_map
+        recorded_maps.append(image.as_array().copy())
+        return image
+
+    static_preconditioner = geometry.allocate(0.0, dtype=np.float64)
+    static_preconditioner.as_array()[...] = supplied_map
+    preconditioner = {
+        "absent": None,
+        "static": static_preconditioner,
+        "callable": callable_preconditioner,
+    }[preconditioner_kind]
+
+    def build(eps_preconditioner):
+        kwargs = dict(
+            initial_estimate=make_image(geometry, 1.0),
+            data_fidelity=QuadraticFunctional(make_image(geometry, 2.0)),
+            prior=ConstantFunctional(0.0, 1.0),
+            step_size=1.0,
+            eps=0.0,
+            initial_line_search=initial_line_search,
+            armijo_iterations=0,
+            preconditioner=preconditioner,
+            preconditioner_update_initial=2,
+            preconditioner_update_interval=1,
+        )
+        if eps_preconditioner is not None:
+            kwargs["eps_preconditioner"] = eps_preconditioner
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            maprl = MAPRL(**kwargs)
+        return maprl, caught
+
+    baseline, baseline_warnings = build(None)
+    deprecated, deprecated_warnings = build(1e-3)
+
+    assert baseline_warnings == []
+    assert len(deprecated_warnings) == 1
+    assert issubclass(deprecated_warnings[0].category, FutureWarning)
+    assert EPS_PRECONDITIONER_DEPRECATION in str(deprecated_warnings[0].message)
+    assert deprecated.eps_preconditioner == 1e-3
+
+    baseline.run(iterations=3, verbose=0)
+    deprecated.run(iterations=3, verbose=0)
+
+    # The run must actually move x, otherwise the comparison is vacuous.
+    assert not np.array_equal(baseline.x.as_array(), make_image(geometry, 1.0).as_array())
+    assert np.array_equal(deprecated.x.as_array(), baseline.x.as_array())
+    assert deprecated._current_step_size == baseline._current_step_size
+    assert deprecated.initial_step_size == baseline.initial_step_size
+
+    # The supplied map is applied verbatim: zeros included, no floor.
+    assert np.array_equal(static_preconditioner.as_array(), supplied_map)
+    if preconditioner_kind == "callable":
+        assert recorded_maps
+        for recorded in recorded_maps:
+            assert np.array_equal(recorded, supplied_map)
+        assert np.array_equal(
+            deprecated._preconditioner_image.as_array(), supplied_map
+        )
+
+
+def test_preconditioner_map_with_zeros_gets_no_floor(geometry):
+    """A supplied map containing exact zeros is applied without any floor."""
+    supplied_map = np.array([[0.0, 1.0, 0.0, 2.0]] * 4, dtype=np.float64)
+
+    def preconditioner(x):
+        image = x.geometry.allocate(0.0, dtype=np.float64)
+        image.as_array()[...] = supplied_map
+        return image
+
+    maprl = make_maprl(
+        geometry,
+        data_fidelity=ConstantFunctional(0.5, 4.0),
+        prior=ConstantFunctional(0.0, 1.0),
+        step_size=0.1,
+        relaxation_eta=0.0,
+        preconditioner=preconditioner,
+        preconditioner_update_initial=1,
+    )
+
+    initial = maprl.x.as_array().copy()
+    maprl.run(iterations=1, verbose=0)
+
+    stored = maprl._preconditioner_image.as_array()
+    assert np.array_equal(stored, supplied_map)
+
+    expected = initial - (0.5 * supplied_map) * 0.1
+    np.testing.assert_allclose(maprl.x.as_array(), expected, rtol=1e-15, atol=1e-15)
+
+    zero_mask = stored == 0.0
+    assert np.any(zero_mask)
+    assert np.array_equal(maprl.x.as_array()[zero_mask], initial[zero_mask])
+
+
 def test_parallel_sum_preconditioner(geometry):
     """The parallel-sum preconditioner is applied correctly."""
     initial = make_image(geometry, 1.0)
@@ -302,12 +450,16 @@ def test_parallel_sum_preconditioner(geometry):
 
     D = initial_values
     R = 0.5
-    P = (D * R) / (D + R + 1e-6)
-    P = np.maximum(P, 1e-6)
+    P = (D * R) / (D + R)
     expected = initial_values - 0.5 * P * 0.1
     expected = np.maximum(expected, 0.0)
 
-    assert np.allclose(maprl.x.as_array(), expected, rtol=1e-5)
+    np.testing.assert_allclose(
+        maprl._preconditioner_image.as_array(), P, rtol=1e-15, atol=0.0
+    )
+    np.testing.assert_allclose(
+        maprl.x.as_array(), expected, rtol=1e-15, atol=1e-15
+    )
 
 
 def test_maprl_armijo_update_periodic(geometry):

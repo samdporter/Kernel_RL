@@ -162,3 +162,101 @@ def test_kernel_operator_auto_backend_with_cuda():
     assert op.backend == 'torch', "Auto backend should choose torch when CUDA is available"
     assert hasattr(op, "device")
     assert op.device.type == 'cuda', "Torch kernel operator should target CUDA device"
+
+
+TORCH_DEVICES = ["cpu", "cuda", "mps"]
+
+
+def _device_available(device):
+    if device == "cuda":
+        return torch.cuda.is_available()
+    if device == "mps":
+        mps = getattr(torch.backends, "mps", None)
+        return mps is not None and mps.is_available()
+    return True
+
+
+def _reference_direct(data, psf):
+    from scipy.ndimage import convolve
+    return convolve(data, psf, mode="constant", cval=0.0)
+
+
+def _reference_adjoint(data, psf):
+    from scipy.ndimage import convolve
+    return convolve(data, psf[::-1, ::-1, ::-1], mode="constant", cval=0.0)
+
+
+def _blur_operator_for_device(monkeypatch, device):
+    """Force the torch blur backend onto a specific device."""
+    monkeypatch.setattr(
+        GaussianBlurringOperator, "_resolve_device", staticmethod(lambda: device)
+    )
+    op = GaussianBlurringOperator((1.0, 1.0, 1.0), MockGeometry(), backend='torch')
+    assert op.device == device
+    return op
+
+
+@pytest.mark.parametrize("device", TORCH_DEVICES)
+def test_torch_blur_direct_matches_zero_padded_reference(monkeypatch, device):
+    if not _device_available(device):
+        pytest.skip(f"torch device '{device}' not available")
+
+    op = _blur_operator_for_device(monkeypatch, device)
+    data = np.random.default_rng(0).normal(size=MockGeometry.shape)
+    image = MockImage(data)
+
+    result = op.direct(image).as_array()
+
+    assert np.allclose(result, _reference_direct(data, op.psf),
+                       atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.parametrize("device", TORCH_DEVICES)
+def test_torch_blur_adjoint_matches_zero_padded_reference(monkeypatch, device):
+    if not _device_available(device):
+        pytest.skip(f"torch device '{device}' not available")
+
+    op = _blur_operator_for_device(monkeypatch, device)
+    data = np.random.default_rng(1).normal(size=MockGeometry.shape)
+    image = MockImage(data)
+
+    result = op.adjoint(image).as_array()
+
+    assert np.allclose(result, _reference_adjoint(data, op.psf),
+                       atol=1e-5, rtol=1e-4)
+
+
+@pytest.mark.parametrize("device", TORCH_DEVICES)
+def test_torch_blur_adjointness(monkeypatch, device):
+    if not _device_available(device):
+        pytest.skip(f"torch device '{device}' not available")
+
+    op = _blur_operator_for_device(monkeypatch, device)
+    rng = np.random.default_rng(2)
+    x = MockImage(rng.normal(size=MockGeometry.shape))
+    y = MockImage(rng.normal(size=MockGeometry.shape))
+
+    forward = op.direct(x).as_array()
+    adjoint = op.adjoint(y).as_array()
+
+    dot_forward = float(np.sum(forward * y.as_array()))
+    dot_adjoint = float(np.sum(x.as_array() * adjoint))
+    assert np.isclose(dot_forward, dot_adjoint, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("device", TORCH_DEVICES)
+def test_torch_blur_constant_volume_boundary_attenuation(monkeypatch, device):
+    if not _device_available(device):
+        pytest.skip(f"torch device '{device}' not available")
+
+    op = _blur_operator_for_device(monkeypatch, device)
+    data = np.ones(MockGeometry.shape)
+    expected = _reference_direct(data, op.psf)
+
+    result = op.direct(MockImage(data)).as_array()
+
+    assert np.allclose(result, expected, atol=1e-5, rtol=1e-4)
+    assert result[0, 0, 0] < 0.5
+    assert np.isclose(result[MockGeometry.shape[0] // 2,
+                             MockGeometry.shape[1] // 2,
+                             MockGeometry.shape[2] // 2], 1.0, atol=1e-5)

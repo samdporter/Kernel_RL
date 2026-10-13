@@ -1,4 +1,5 @@
 import logging
+import warnings
 
 import numpy as np
 from cil.optimisation.algorithms import Algorithm
@@ -9,7 +10,14 @@ LOGGER = logging.getLogger(__name__)
 class MAPRL(Algorithm):
     """MAPRL algorithm with EM-style updates and an Armijo line search.
 
-    ``eps_preconditioner`` is currently unused/reserved.
+    Parameters
+    ----------
+    eps_preconditioner : float, optional
+        Deprecated and ignored: it has no effect on any update or line-search
+        equation. Stabilisation, if needed, belongs inside the supplied
+        preconditioner; ``eps`` is what scales the unpreconditioned EM update.
+        Omitting it keeps the legacy stored attribute value ``1e-6``;
+        supplying any value raises a ``FutureWarning``.
     """
 
     def __init__(
@@ -30,7 +38,7 @@ class MAPRL(Algorithm):
         preconditioner=None,
         preconditioner_update_initial=25,
         preconditioner_update_interval=5,
-        eps_preconditioner=1e-6,
+        eps_preconditioner=None,
         **kwargs,
     ):
         if not np.isfinite(relaxation_eta) or relaxation_eta < 0:
@@ -61,7 +69,18 @@ class MAPRL(Algorithm):
         self.preconditioner = preconditioner  # Can be callable or ImageData
         self.preconditioner_update_initial = preconditioner_update_initial
         self.preconditioner_update_interval = preconditioner_update_interval
-        self.eps_preconditioner = eps_preconditioner
+        if eps_preconditioner is not None:
+            warnings.warn(
+                "eps_preconditioner is deprecated and has no effect. Apply "
+                "stabilisation inside the supplied preconditioner. The eps "
+                "parameter affects only the unpreconditioned EM scaling.",
+                FutureWarning,
+                stacklevel=2,
+            )
+        # Retained for API compatibility; see the class docstring.
+        self.eps_preconditioner = (
+            1e-6 if eps_preconditioner is None else eps_preconditioner
+        )
         self._preconditioner_image = None
 
         super(MAPRL, self).__init__(**kwargs)
